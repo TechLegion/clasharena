@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # Database
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: clasharena
+      POSTGRES_USER: clasharena_user
+      POSTGRES_PASSWORD: clasharena_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - clasharena-network
+
+  # Redis (for future caching and Celery)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - clasharena-network
+
+  # ClashArena Backend (Monolithic)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://clasharena_user:clasharena_password@postgres:5432/clasharena
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - clasharena-network
+    volumes:
+      - ./backend:/app  # For development hot reload
+      - ./.env:/app/.env  # Mount .env file
+
+  # Celery Worker
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.core.celery_app:celery_app worker --loglevel=info --concurrency=4 --queues=auth,wallet,matches,referrals,admin
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://clasharena_user:clasharena_password@postgres:5432/clasharena
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+      - backend
+    networks:
+      - clasharena-network
+    volumes:
+      - ./backend:/app  # For development hot reload
+      - ./.env:/app/.env  # Mount .env file
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  clasharena-network:
+    driver: bridge
