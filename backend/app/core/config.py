@@ -9,6 +9,8 @@ class Settings:
     PROJECT_NAME: str = "ClashArena"
     VERSION: str = "1.0.0"
     DESCRIPTION: str = "Gaming platform for ClashArena players"
+    ENV: str = os.getenv("ENV", "development")
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here")
@@ -17,9 +19,13 @@ class Settings:
     
     # Database - PostgreSQL configuration
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:sammyokay@localhost:5432/clasharena")
+    SQLALCHEMY_ECHO: bool = os.getenv("SQLALCHEMY_ECHO", "false").lower() == "true"
     
     # Redis
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info")
     
     # Payment Gateways - Paystack 2025
     PAYSTACK_SECRET_KEY: str = os.getenv("PAYSTACK_SECRET_KEY", "")

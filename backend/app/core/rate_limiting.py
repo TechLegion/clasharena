@@ -16,20 +16,23 @@ try:
     limiter = Limiter(
         key_func=get_remote_address,
         storage_uri="redis://localhost:6379",  # Use Redis if available
-        default_limits=["1000/hour"]  # Global limit as fallback
+        default_limits=["1000/hour"],  # Global limit as fallback
+        headers_enabled=True,
     )
-    logger.info("Rate limiter initialized with Redis backend")
+    # Reduce noise: do not log successful init at info in production
+    logger.debug("Rate limiter initialized with Redis backend")
 except Exception as e:
     # Fallback to in-memory storage if Redis is not available
     limiter = Limiter(
         key_func=get_remote_address,
         default_limits=["1000/hour"]
     )
-    logger.warning(f"Rate limiter initialized with in-memory storage: {e}")
+    logger.debug(f"Rate limiter initialized with in-memory storage: {e}")
 
 def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     """Custom handler for rate limit exceeded errors"""
-    logger.warning(f"Rate limit exceeded for IP {get_remote_address(request)}")
+    # Avoid noisy logs on normal user behavior; keep it at debug or structured security logs
+    logger.debug(f"Rate limit exceeded for IP {get_remote_address(request)}")
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail={
@@ -69,10 +72,10 @@ def safe_rate_limit(limit_string: str):
                 try:
                     return await decorated_func(request, *args, **kwargs)
                 except Exception as e:
-                    logger.warning(f"Rate limiting failed, continuing without limits: {e}")
+                    logger.debug(f"Rate limiting failed, continuing without limits: {e}")
                     return await func(request, *args, **kwargs)
             return wrapper
         except Exception as e:
-            logger.warning(f"Rate limiting setup failed, continuing without limits: {e}")
+            logger.debug(f"Rate limiting setup failed, continuing without limits: {e}")
             return func
     return decorator

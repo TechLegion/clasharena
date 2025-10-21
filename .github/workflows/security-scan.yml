@@ -1,0 +1,97 @@
+name: Security Scanning
+
+on:
+  schedule:
+    - cron: '0 2 * * 1' # Weekly on Monday at 2 AM
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  dependency-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install Python dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install safety bandit
+
+    - name: Scan Python dependencies for vulnerabilities
+      run: |
+        cd backend
+        safety check --json --output safety-report.json
+        bandit -r . -f json -o bandit-report.json
+
+    - name: Upload Python security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: python-security-reports
+        path: |
+          backend/safety-report.json
+          backend/bandit-report.json
+
+    - name: Scan Node.js dependencies
+      run: |
+        cd frontend
+        npm audit --audit-level=moderate --json > npm-audit.json
+
+    - name: Upload Node.js security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: nodejs-security-reports
+        path: frontend/npm-audit.json
+
+  container-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: |
+        cd backend
+        docker build -t clasharena-backend .
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'clasharena-backend'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run TruffleHog OSS
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified

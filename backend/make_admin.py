@@ -24,32 +24,31 @@ def make_user_admin(email: str):
         
         # Find user by email
         user = db.query(User).filter(User.email == email).first()
-        
         if not user:
             print(f"❌ User with email '{email}' not found!")
             return False
-        
+
         # Check if already admin
         if user.is_admin:
             print(f"✅ User '{user.username}' ({email}) is already an admin!")
             return True
-        
+
         # Promote to admin
         user.is_admin = True
         user.updated_at = datetime.now()
-        
+
         db.commit()
         db.refresh(user)
         db.close()
-        
+
         print(f"🎉 Successfully promoted '{user.username}' ({email}) to admin!")
         print(f"   Username: {user.username}")
         print(f"   Full Name: {user.full_name}")
         print(f"   Email: {user.email}")
         print(f"   Admin Status: ✅ Active")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"❌ Error promoting user to admin: {str(e)}")
         if 'db' in locals():
@@ -57,19 +56,20 @@ def make_user_admin(email: str):
             db.close()
         return False
 
+
 def main():
     print("🔧 ClashArena Admin Promotion Script")
     print("=" * 40)
-    
+
     # Target email
     target_email = "techlegion01@gmail.com"
-    
+
     print(f"🎯 Promoting user: {target_email}")
     print()
-    
+
     # Make user admin
     success = make_user_admin(target_email)
-    
+
     if success:
         print()
         print("✅ Admin promotion completed successfully!")

@@ -6,7 +6,8 @@ from typing import Generator
 from app.core.config import settings
 
 # Create database engine
-engine = create_engine(settings.DATABASE_URL, echo=True)
+# Use echo only when explicitly enabled (development). Defaults to False for security.
+engine = create_engine(settings.DATABASE_URL, echo=settings.SQLALCHEMY_ECHO)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

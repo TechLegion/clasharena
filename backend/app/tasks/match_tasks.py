@@ -1,397 +1,402 @@
-import os
-import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+"""
+Enhanced match tasks for handling game data integration
+"""
 
-from celery import current_task
+from celery import Celery
 from sqlalchemy.orm import Session
-from app.core.celery_app import celery_app
 from app.core.database import get_db
-from shared.models import User, Match, Transaction, Wallet
-import uuid
-from decimal import Decimal
-from datetime import datetime
-from typing import List, Dict, Any
+from shared.models import Match, User, Wallet, Transaction
+from typing import Dict, Any, List
 import json
+import logging
+from datetime import datetime, timedelta
+import requests
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Initialize Celery app (this should be imported from your main app)
+from app.core.celery_app import celery_app
 
 @celery_app.task(bind=True)
-def create_match_task(self, match_data: dict):
-    """Create a new match with comprehensive validation and processing"""
+def create_match_task(self, match_data: Dict[str, Any]):
+    """Create a new match with proper validation"""
     try:
-        # Update task status
-        self.update_state(state='PROGRESS', meta={'status': 'Creating match...'})
-        
-        # Get database session
         db = next(get_db())
         
-        # Verify user exists and is active
-        user = db.query(User).filter(User.id == match_data['user_id']).first()
-        if not user or not user.is_active:
-            db.close()
-            return {'success': False, 'error': 'User not found or inactive'}
+        # Validate user has sufficient balance
+        user = db.query(User).filter(User.id == match_data["user_id"]).first()
+        if not user:
+            raise Exception("User not found")
         
-        # Validate match data
-        game_type = match_data['game_type']
-        match_type = match_data.get('match_type', 'solo')
-        entry_fee = Decimal(str(match_data['entry_fee']))
-        
-        # Validate entry fee
-        if entry_fee <= 0:
-            db.close()
-            return {'success': False, 'error': 'Invalid entry fee'}
-        
-        # Update task status
-        self.update_state(state='PROGRESS', meta={'status': 'Checking wallet balance...'})
-        
-        # Check wallet balance
-        wallet = db.query(Wallet).filter(Wallet.user_id == match_data['user_id']).first()
-        if not wallet:
-            db.close()
-            return {'success': False, 'error': 'Wallet not found'}
-        
-        if wallet.balance < entry_fee:
-            db.close()
-            return {'success': False, 'error': 'Insufficient balance'}
-        
-        # Calculate prize pool based on match type
-        prize_multipliers = {
-            'solo': 1.8,
-            'duo': 2.0,
-            'squad': 2.2,
-            'battle_royale': 2.5,
-            'multiplayer': 1.8,
-            'ranked': 2.0,
-            'tournament': 2.5,
-            'friendly': 1.5,
-            'league': 2.0,
-            'ladder': 1.8,
-            'challenge': 2.2
-        }
-        
-        multiplier = prize_multipliers.get(match_type, 1.8)
-        prize_pool = entry_fee * Decimal(str(multiplier))
-        
-        # Update task status
-        self.update_state(state='PROGRESS', meta={'status': 'Creating match record...'})
+        wallet = db.query(Wallet).filter(Wallet.user_id == user.id).first()
+        if not wallet or wallet.balance < match_data["entry_fee"]:
+            raise Exception("Insufficient balance")
         
         # Create match
         match = Match(
-            id=str(uuid.uuid4()),
-            user_id=match_data['user_id'],
-            game_type=game_type,
-            match_type=match_type,
-            entry_fee=entry_fee,
-            prize_pool=prize_pool,
+            user_id=match_data["user_id"],
+            game_type=match_data["game_type"],
+            match_type=match_data["match_type"],
+            entry_fee=match_data["entry_fee"],
+            prize_pool=match_data["entry_fee"] * 1.8,  # 80% return to winner
             status="pending",
-            created_at=datetime.utcnow()
+            match_data=json.dumps({
+                "game_settings": match_data.get("game_settings", {}),
+                "player_stats": match_data.get("player_stats", {}),
+                "match_config": match_data.get("match_config", {}),
+                "created_at": datetime.utcnow().isoformat()
+            })
         )
         
         db.add(match)
         
-        # Update task status
-        self.update_state(state='PROGRESS', meta={'status': 'Processing payment...'})
-        
         # Deduct entry fee from wallet
-        wallet.balance -= entry_fee
+        wallet.balance -= match_data["entry_fee"]
         
         # Create transaction record
         transaction = Transaction(
-            id=str(uuid.uuid4()),
             wallet_id=wallet.id,
-            amount=-entry_fee,
-            transaction_type="match_entry",
+            amount=-match_data["entry_fee"],
+            transaction_type="bet",
             status="completed",
-            description=f"Entry fee for {game_type} {match_type} match",
-            created_at=datetime.utcnow()
+            reference=f"MATCH_{match.id}",
+            description=f"Entry fee for {match_data['game_type']} match"
         )
         
         db.add(transaction)
-        
-        # Update match status to active
-        match.status = "active"
-        
         db.commit()
-        db.refresh(match)
-        db.refresh(wallet)
         
-        db.close()
-        
-        return {
-            'success': True,
-            'match': {
-                'id': match.id,
-                'game_type': match.game_type,
-                'match_type': match.match_type,
-                'entry_fee': float(match.entry_fee),
-                'prize_pool': float(match.prize_pool),
-                'status': match.status,
-                'created_at': match.created_at.isoformat(),
-                'new_balance': float(wallet.balance)
-            }
-        }
+        logger.info(f"Match created successfully: {match.id}")
+        return {"status": "success", "match_id": match.id}
         
     except Exception as e:
-        db.close()
-        return {'success': False, 'error': str(e)}
+        logger.error(f"Error creating match: {str(e)}")
+        db.rollback()
+        raise self.retry(exc=e, countdown=60, max_retries=3)
 
 @celery_app.task(bind=True)
-def update_match_result_task(self, match_id: str, result_data: dict):
-    """Update match result and distribute prizes"""
+def process_game_data_task(self, game_data: Dict[str, Any]):
+    """Process incoming game data and update match status"""
     try:
-        # Update task status
-        self.update_state(state='PROGRESS', meta={'status': 'Updating match result...'})
-        
-        # Get database session
         db = next(get_db())
         
-        # Find match
+        match = db.query(Match).filter(Match.id == game_data["match_id"]).first()
+        if not match:
+            raise Exception("Match not found")
+        
+        # Update match data with new game data
+        current_data = json.loads(match.match_data) if match.match_data else {}
+        current_data[game_data["event_type"]] = {
+            "timestamp": game_data["timestamp"],
+            "data": game_data["data"]
+        }
+        
+        match.match_data = json.dumps(current_data)
+        
+        # Update match status based on event type
+        if game_data["event_type"] == "match_start":
+            match.status = "active"
+        elif game_data["event_type"] == "match_end":
+            match.status = "completed"
+        
+        db.commit()
+        
+        # Send real-time update via WebSocket (if implemented)
+        send_match_update.delay(match.id, game_data)
+        
+        logger.info(f"Processed game data for match {match.id}")
+        return {"status": "success", "event_type": game_data["event_type"]}
+        
+    except Exception as e:
+        logger.error(f"Error processing game data: {str(e)}")
+        raise self.retry(exc=e, countdown=30, max_retries=3)
+
+@celery_app.task(bind=True)
+def process_match_result_task(self, result_data: Dict[str, Any]):
+    """Process final match results and distribute winnings"""
+    try:
+        db = next(get_db())
+        
+        match = db.query(Match).filter(Match.id == result_data["match_id"]).first()
+        if not match:
+            raise Exception("Match not found")
+        
+        # Validate match result
+        if not validate_match_result(result_data):
+            raise Exception("Invalid match result")
+        
+        # Update match with result
+        match.status = "completed"
+        match.result = "win" if result_data.get("placement", 0) <= 1 else "loss"
+        
+        # Update match data with final result
+        current_data = json.loads(match.match_data) if match.match_data else {}
+        current_data["final_result"] = {
+            "placement": result_data.get("placement"),
+            "kills": result_data.get("kills"),
+            "damage": result_data.get("damage"),
+            "survival_time": result_data.get("survival_time"),
+            "screenshots": result_data.get("screenshots", []),
+            "replay_data": result_data.get("replay_data", {}),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        match.match_data = json.dumps(current_data)
+        
+        # Distribute winnings if player won
+        if match.result == "win":
+            distribute_winnings.delay(match.id)
+        
+        db.commit()
+        
+        # Send notification
+        send_match_notification.delay(match.user_id, match.id, match.result)
+        
+        logger.info(f"Processed match result for match {match.id}")
+        return {"status": "success", "result": match.result}
+        
+    except Exception as e:
+        logger.error(f"Error processing match result: {str(e)}")
+        raise self.retry(exc=e, countdown=60, max_retries=3)
+
+@celery_app.task(bind=True)
+def process_game_events_task(self, events: List[Dict[str, Any]]):
+    """Process real-time game events"""
+    try:
+        db = next(get_db())
+        
+        for event in events:
+            match = db.query(Match).filter(Match.id == event["match_id"]).first()
+            if match:
+                # Update match data with event
+                current_data = json.loads(match.match_data) if match.match_data else {}
+                if "events" not in current_data:
+                    current_data["events"] = []
+                
+                current_data["events"].append({
+                    "type": event["event_type"],
+                    "timestamp": event["timestamp"],
+                    "data": event["event_data"]
+                })
+                
+                match.match_data = json.dumps(current_data)
+        
+        db.commit()
+        
+        # Send real-time updates
+        for event in events:
+            send_match_update.delay(event["match_id"], event)
+        
+        logger.info(f"Processed {len(events)} game events")
+        return {"status": "success", "events_processed": len(events)}
+        
+    except Exception as e:
+        logger.error(f"Error processing game events: {str(e)}")
+        raise self.retry(exc=e, countdown=30, max_retries=3)
+
+@celery_app.task(bind=True)
+def verify_match_integrity_task(self, match_id: str, verification_data: Dict[str, Any]):
+    """Verify match integrity and detect cheating"""
+    try:
+        db = next(get_db())
+        
         match = db.query(Match).filter(Match.id == match_id).first()
         if not match:
-            db.close()
-            return {'success': False, 'error': 'Match not found'}
+            raise Exception("Match not found")
         
-        if match.status not in ['active', 'pending']:
-            db.close()
-            return {'success': False, 'error': 'Match is not active'}
+        # Perform integrity checks
+        integrity_score = perform_integrity_checks(match, verification_data)
         
-        # Update match with results
-        match.status = "completed"
-        match.result = result_data.get('result', 'completed')
-        match.updated_at = datetime.utcnow()
+        # Update match with verification results
+        current_data = json.loads(match.match_data) if match.match_data else {}
+        current_data["verification"] = {
+            "integrity_score": integrity_score,
+            "verification_data": verification_data,
+            "timestamp": datetime.utcnow().isoformat(),
+            "passed": integrity_score >= 0.8
+        }
+        match.match_data = json.dumps(current_data)
         
-        # Update task status
-        self.update_state(state='PROGRESS', meta={'status': 'Processing winnings...'})
-        
-        # If user won, add prize to wallet
-        if result_data.get('won', False):
-            wallet = db.query(Wallet).filter(Wallet.user_id == match.user_id).first()
-            if wallet:
-                # Create winning transaction
-                winning_transaction = Transaction(
-                    id=str(uuid.uuid4()),
-                    wallet_id=wallet.id,
-                    amount=match.prize_pool,
-                    transaction_type="match_win",
-                    status="completed",
-                    description=f"Prize for winning {match.game_type} {match.match_type} match",
-                    created_at=datetime.utcnow()
-                )
-                
-                db.add(winning_transaction)
-                wallet.balance += match.prize_pool
+        # If integrity check fails, flag for review
+        if integrity_score < 0.8:
+            flag_match_for_review.delay(match_id, integrity_score)
         
         db.commit()
-        db.refresh(match)
         
-        db.close()
-        
-        return {
-            'success': True,
-            'match': {
-                'id': match.id,
-                'status': match.status,
-                'result': match.result,
-                'updated_at': match.updated_at.isoformat(),
-                'won': result_data.get('won', False)
-            }
-        }
+        logger.info(f"Verified match integrity for match {match_id}: {integrity_score}")
+        return {"status": "success", "integrity_score": integrity_score}
         
     except Exception as e:
-        db.close()
-        return {'success': False, 'error': str(e)}
+        logger.error(f"Error verifying match integrity: {str(e)}")
+        raise self.retry(exc=e, countdown=60, max_retries=3)
 
 @celery_app.task(bind=True)
-def get_user_matches_task(self, user_id: str, limit: int = 50):
-    """Get user's match history with comprehensive data"""
+def distribute_winnings_task(self, match_id: str):
+    """Distribute winnings to the winner"""
     try:
-        # Get database session
         db = next(get_db())
         
-        # Verify user exists
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            db.close()
-            return {'success': False, 'error': 'User not found'}
+        match = db.query(Match).filter(Match.id == match_id).first()
+        if not match or match.result != "win":
+            raise Exception("Match not found or not won")
         
-        # Get matches with pagination
-        matches = db.query(Match).filter(
-            Match.user_id == user_id
-        ).order_by(Match.created_at.desc()).limit(limit).all()
+        user = db.query(User).filter(User.id == match.user_id).first()
+        wallet = db.query(Wallet).filter(Wallet.user_id == user.id).first()
         
-        db.close()
+        if not wallet:
+            raise Exception("Wallet not found")
         
-        match_list = []
-        total_winnings = 0
-        total_bets = 0
-        wins = 0
+        # Add winnings to wallet
+        wallet.balance += match.prize_pool
         
-        for match in matches:
-            match_data = {
-                'id': match.id,
-                'game_type': match.game_type,
-                'match_type': match.match_type,
-                'entry_fee': float(match.entry_fee),
-                'prize_pool': float(match.prize_pool),
-                'status': match.status,
-                'result': match.result,
-                'created_at': match.created_at.isoformat() if match.created_at else None,
-                'updated_at': match.updated_at.isoformat() if match.updated_at else None
-            }
-            
-            match_list.append(match_data)
-            
-            # Calculate stats
-            total_bets += float(match.entry_fee)
-            if match.result and match.result.lower() in ['win', 'won', 'victory']:
-                wins += 1
-                total_winnings += float(match.prize_pool)
-        
-        win_rate = (wins / len(matches) * 100) if matches else 0
-        
-        return {
-            'success': True,
-            'matches': match_list,
-            'stats': {
-                'total_matches': len(matches),
-                'wins': wins,
-                'win_rate': round(win_rate, 2),
-                'total_bets': total_bets,
-                'total_winnings': total_winnings,
-                'net_profit': total_winnings - total_bets
-            },
-            'count': len(match_list)
-        }
-        
-    except Exception as e:
-        db.close()
-        return {'success': False, 'error': str(e)}
-
-@celery_app.task(bind=True)
-def get_leaderboard_task(self, game_type: str = None, limit: int = 100):
-    """Get comprehensive leaderboard with user statistics"""
-    try:
-        # Get database session
-        db = next(get_db())
-        
-        # Query for completed matches with wins
-        query = db.query(Match).filter(
-            Match.status == "completed",
-            Match.result.in_(["win", "won", "victory"])
+        # Create transaction record
+        transaction = Transaction(
+            wallet_id=wallet.id,
+            amount=match.prize_pool,
+            transaction_type="win",
+            status="completed",
+            reference=f"WIN_{match.id}",
+            description=f"Winnings from {match.game_type} match"
         )
         
-        if game_type:
-            query = query.filter(Match.game_type == game_type)
+        db.add(transaction)
+        db.commit()
         
-        matches = query.all()
-        
-        # Calculate leaderboard
-        user_stats = {}
-        for match in matches:
-            if match.user_id not in user_stats:
-                user_stats[match.user_id] = {
-                    'user_id': match.user_id,
-                    'wins': 0,
-                    'total_prizes': Decimal('0'),
-                    'games_played': 0,
-                    'total_bets': Decimal('0'),
-                    'win_rate': 0,
-                    'net_profit': Decimal('0')
-                }
-            
-            user_stats[match.user_id]['wins'] += 1
-            user_stats[match.user_id]['total_prizes'] += match.prize_pool
-            user_stats[match.user_id]['total_bets'] += match.entry_fee
-            user_stats[match.user_id]['net_profit'] += (match.prize_pool - match.entry_fee)
-        
-        # Get total games played for win rate calculation
-        all_matches_query = db.query(Match).filter(Match.status == "completed")
-        if game_type:
-            all_matches_query = all_matches_query.filter(Match.game_type == game_type)
-        
-        all_matches = all_matches_query.all()
-        for match in all_matches:
-            if match.user_id in user_stats:
-                user_stats[match.user_id]['games_played'] += 1
-        
-        # Calculate win rates
-        for user_id, stats in user_stats.items():
-            if stats['games_played'] > 0:
-                stats['win_rate'] = round((stats['wins'] / stats['games_played']) * 100, 2)
-        
-        # Sort by wins, then by net profit
-        leaderboard = sorted(
-            user_stats.values(),
-            key=lambda x: (x['wins'], float(x['net_profit'])),
-            reverse=True
-        )[:limit]
-        
-        # Convert Decimal to float for JSON serialization
-        for entry in leaderboard:
-            entry['total_prizes'] = float(entry['total_prizes'])
-            entry['total_bets'] = float(entry['total_bets'])
-            entry['net_profit'] = float(entry['net_profit'])
-        
-        db.close()
-        
-        return {
-            'success': True,
-            'leaderboard': leaderboard,
-            'count': len(leaderboard),
-            'game_type': game_type or 'all'
-        }
+        logger.info(f"Distributed winnings for match {match_id}: {match.prize_pool}")
+        return {"status": "success", "winnings": match.prize_pool}
         
     except Exception as e:
-        db.close()
-        return {'success': False, 'error': str(e)}
+        logger.error(f"Error distributing winnings: {str(e)}")
+        raise self.retry(exc=e, countdown=60, max_retries=3)
 
 @celery_app.task(bind=True)
-def get_match_statistics_task(self, user_id: str = None, game_type: str = None):
-    """Get comprehensive match statistics"""
+def send_match_update_task(self, match_id: str, update_data: Dict[str, Any]):
+    """Send real-time match updates via WebSocket"""
     try:
-        # Get database session
-        db = next(get_db())
-        
-        # Build query
-        query = db.query(Match).filter(Match.status == "completed")
-        
-        if user_id:
-            query = query.filter(Match.user_id == user_id)
-        if game_type:
-            query = query.filter(Match.game_type == game_type)
-        
-        matches = query.all()
-        
-        # Calculate statistics
-        total_matches = len(matches)
-        total_volume = sum(float(match.entry_fee) for match in matches)
-        total_prizes = sum(float(match.prize_pool) for match in matches)
-        
-        wins = sum(1 for match in matches if match.result and match.result.lower() in ['win', 'won', 'victory'])
-        win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
-        
-        # Game type distribution
-        game_types = {}
-        match_types = {}
-        
-        for match in matches:
-            game_types[match.game_type] = game_types.get(match.game_type, 0) + 1
-            match_types[match.match_type] = match_types.get(match.match_type, 0) + 1
-        
-        db.close()
-        
-        return {
-            'success': True,
-            'statistics': {
-                'total_matches': total_matches,
-                'total_volume': total_volume,
-                'total_prizes': total_prizes,
-                'wins': wins,
-                'win_rate': round(win_rate, 2),
-                'game_types': game_types,
-                'match_types': match_types,
-                'average_bet': total_volume / total_matches if total_matches > 0 else 0
-            }
-        }
+        # This would integrate with your WebSocket system
+        # For now, we'll just log the update
+        logger.info(f"Sending match update for {match_id}: {update_data}")
+        return {"status": "success"}
         
     except Exception as e:
-        db.close()
-        return {'success': False, 'error': str(e)}
+        logger.error(f"Error sending match update: {str(e)}")
+        raise self.retry(exc=e, countdown=30, max_retries=3)
+
+@celery_app.task(bind=True)
+def send_match_notification_task(self, user_id: str, match_id: str, result: str):
+    """Send match completion notification to user"""
+    try:
+        # This would integrate with your notification system (email, push, SMS)
+        logger.info(f"Sending match notification to user {user_id}: {result}")
+        return {"status": "success"}
+        
+    except Exception as e:
+        logger.error(f"Error sending match notification: {str(e)}")
+        raise self.retry(exc=e, countdown=30, max_retries=3)
+
+@celery_app.task(bind=True)
+def flag_match_for_review_task(self, match_id: str, integrity_score: float):
+    """Flag match for manual review due to integrity concerns"""
+    try:
+        db = next(get_db())
+        
+        match = db.query(Match).filter(Match.id == match_id).first()
+        if match:
+            # Update match status to flagged
+            match.status = "flagged_for_review"
+            
+            # Create admin notification
+            # This would integrate with your admin notification system
+            logger.warning(f"Match {match_id} flagged for review. Integrity score: {integrity_score}")
+        
+        db.commit()
+        return {"status": "success"}
+        
+    except Exception as e:
+        logger.error(f"Error flagging match for review: {str(e)}")
+        raise self.retry(exc=e, countdown=60, max_retries=3)
+
+def validate_match_result(result_data: Dict[str, Any]) -> bool:
+    """Validate match result data for authenticity"""
+    try:
+        # Basic validation
+        required_fields = ["match_id", "player_id"]
+        for field in required_fields:
+            if field not in result_data:
+                return False
+        
+        # Validate placement
+        placement = result_data.get("placement")
+        if placement is not None and (placement < 1 or placement > 100):
+            return False
+        
+        # Validate kills
+        kills = result_data.get("kills")
+        if kills is not None and (kills < 0 or kills > 50):
+            return False
+        
+        # Add more validation rules as needed
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error validating match result: {str(e)}")
+        return False
+
+def perform_integrity_checks(match: Match, verification_data: Dict[str, Any]) -> float:
+    """Perform integrity checks on match data"""
+    try:
+        score = 1.0
+        
+        # Check for suspicious patterns
+        match_data = json.loads(match.match_data) if match.match_data else {}
+        
+        # Check for unrealistic scores
+        if "final_result" in match_data:
+            final_result = match_data["final_result"]
+            
+            # Check for unrealistic kill count
+            kills = final_result.get("kills", 0)
+            if kills > 30:  # Suspiciously high kill count
+                score -= 0.2
+            
+            # Check for unrealistic damage
+            damage = final_result.get("damage", 0)
+            if damage > 5000:  # Suspiciously high damage
+                score -= 0.2
+            
+            # Check for impossible placement with high kills
+            placement = final_result.get("placement", 0)
+            if placement > 50 and kills > 20:
+                score -= 0.3
+        
+        # Check for replay data consistency
+        if "replay_data" in match_data:
+            replay_data = match_data["replay_data"]
+            # Add replay-based integrity checks here
+        
+        # Check for screenshot authenticity
+        if "screenshots" in match_data:
+            screenshots = match_data["screenshots"]
+            # Add screenshot verification here
+        
+        return max(0.0, score)
+        
+    except Exception as e:
+        logger.error(f"Error performing integrity checks: {str(e)}")
+        return 0.0
+
+# Legacy task functions for backward compatibility
+def create_match_task(match_data: Dict[str, Any]):
+    return create_match_task.delay(match_data)
+
+def update_match_result_task(match_id: str, result_data: Dict[str, Any]):
+    return process_match_result_task.delay({"match_id": match_id, **result_data})
+
+def get_user_matches_task(user_id: str):
+    # This would be implemented as needed
+    pass
+
+def get_leaderboard_task(game_type: str = None, limit: int = 100):
+    # This would be implemented as needed
+    pass

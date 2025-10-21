@@ -30,7 +30,7 @@ git commit -m "Initial ClashArena deployment"
 git remote add origin https://github.com/TechLegion/clasharena.git
 
 # Push to GitHub
-git push -u origin main
+git push -u origin master
 ```
 
 ### 2. Deploy Backend to Railway

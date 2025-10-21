@@ -1,0 +1,53 @@
+# Example Terraform variables file
+# Copy this to terraform.tfvars and fill in your values
+
+# AWS Configuration
+aws_region = "us-east-1"
+environment = "production"
+
+# Project Configuration
+project_name = "clasharena"
+
+# Database Configuration
+db_password = "your-secure-database-password"
+db_username = "clasharena_user"
+
+# Application Configuration
+secret_key = "your-secret-key-here"
+ecr_repository_url = "your-account.dkr.ecr.us-east-1.amazonaws.com/clasharena"
+
+# Domain Configuration (optional)
+domain_name = "your-domain.com"
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+
+# Auto Scaling Configuration
+enable_auto_scaling = true
+min_capacity = 2
+max_capacity = 10
+target_cpu_utilization = 70
+target_memory_utilization = 80
+
+# Database Configuration
+backup_retention_days = 7
+instance_class = "db.t3.micro"
+allocated_storage = 20
+max_allocated_storage = 100
+
+# Redis Configuration
+redis_node_type = "cache.t3.micro"
+redis_num_cache_clusters = 2
+
+# ECS Configuration
+task_cpu = "512"
+task_memory = "1024"
+desired_count = 2
+
+# Logging Configuration
+log_retention_days = 30
+
+# Additional Tags
+tags = {
+  Owner = "your-name"
+  Purpose = "clasharena-production"
+  Environment = "production"
+}
