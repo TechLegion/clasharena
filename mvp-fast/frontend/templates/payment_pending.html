@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Pending - ClashArena</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body style="background: var(--color-black); min-height: 100vh; padding: 20px;">
+    <div class="container">
+        <div class="pending-card">
+            <div class="logo-container" style="margin-bottom: 20px;">
+                <img src="/static/logo.jpg" alt="ClashArena Logo" class="logo" style="max-width: 150px;">
+            </div>
+            <div class="pending-icon">⏳</div>
+            <h1>Payment Verification</h1>
+            <p class="subtitle">We're verifying your payment...</p>
+            <p>Payment Reference: <strong>{{ payment_reference }}</strong></p>
+            <p>Please wait while we confirm your payment. This page will refresh automatically.</p>
+            <div class="loading-spinner"></div>
+        </div>
+    </div>
+    <script>
+        // Auto-refresh after 3 seconds
+        setTimeout(() => {
+            window.location.reload();
+        }, 3000);
+    </script>
+</body>
+</html>
+

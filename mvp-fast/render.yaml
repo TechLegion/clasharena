@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: clasharena-mvp
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "cd backend && pip install -r requirements.txt"
+    startCommand: "cd backend && gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DB_HOST
+        fromDatabase:
+          name: clasharena-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: clasharena-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: clasharena-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: clasharena-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: clasharena-db
+          property: database
+
+databases:
+  - name: clasharena-db
+    databaseName: clasharena_production
+    user: clasharena_user
+    plan: free
+

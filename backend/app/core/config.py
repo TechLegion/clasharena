@@ -42,13 +42,18 @@ class Settings:
     FROM_NAME: str = os.getenv("FROM_NAME", "ClashArena Team")
     
     # Frontend URL
-    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://clasharena.online")
     
     # CORS
     BACKEND_CORS_ORIGINS: list = [
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:8000",
+        "https://clasharenafrontend.vercel.app",  # Main Vercel frontend URL
+        "https://clasharenafrontend-32sn8g2y5-techlegions-projects.vercel.app",  # Backup URL
+        "https://clasharena-frontend.vercel.app",  # For future deployments
+        "https://clasharena.online",  # Custom domain
+        "https://www.clasharena.online",  # WWW subdomain
     ]
     
     # Social Auth

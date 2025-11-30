@@ -42,60 +42,40 @@ async def deposit_funds(
     current_user: User = Depends(get_current_active_user), 
     db: Session = Depends(get_db)
 ):
-    """Process deposit request"""
+    """Initialize deposit request - redirects to proper payment flow"""
     try:
         amount = deposit_data["amount"]
-        payment_method = deposit_data.get("payment_method", "paystack")
-        reference = deposit_data.get("reference", f"dep_{current_user.id}_{db.query(Transaction).count()}")
+        email = deposit_data.get("email", current_user.email)
         
-        # Get or create wallet
-        wallet = db.query(Wallet).filter(Wallet.user_id == current_user.id).first()
-        if not wallet:
-            wallet = Wallet(user_id=current_user.id, balance=0.0)
-            db.add(wallet)
-            db.commit()
-            db.refresh(wallet)
+        # Validate amount
+        if amount < 100:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="Minimum deposit amount is ₦100"
+            )
         
-        # Create transaction record
-        transaction = Transaction(
-            wallet_id=wallet.id,
-            amount=amount,
-            transaction_type="deposit",
-            status="pending",
-            reference=reference,
-            description=f"Deposit via {payment_method}"
-        )
-        db.add(transaction)
-        db.commit()
-        db.refresh(transaction)
+        if amount > 1000000:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="Maximum deposit amount is ₦1,000,000"
+            )
         
-        # Simulate payment processing (in production, integrate with actual payment gateways)
-        if amount > 0:
-            # Simulate successful payment
-            wallet.balance += amount
-            transaction.status = "completed"
-            transaction.external_reference = f"PAY_{reference}"
-            db.commit()
+        # Redirect to proper payment initialization
+        from app.api.v1.payments import initialize_deposit
+        from pydantic import BaseModel
+        
+        class DepositRequest(BaseModel):
+            amount: float
+            email: str
+        
+        deposit_request = DepositRequest(amount=amount, email=email)
+        
+        # Call the proper payment initialization
+        return await initialize_deposit(deposit_request, current_user, db)
             
-            return {
-                "status": "success",
-                "message": "Deposit successful",
-                "transaction_id": transaction.id,
-                "new_balance": wallet.balance,
-                "reference": reference
-            }
-        else:
-            transaction.status = "failed"
-            db.commit()
-            
-            return {
-                "status": "failed",
-                "message": "Invalid amount",
-                "transaction_id": transaction.id
-            }
-            
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @router.get("/transactions")

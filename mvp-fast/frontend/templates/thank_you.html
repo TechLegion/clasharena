@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thank You - ClashArena</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body style="background: var(--color-black); min-height: 100vh; padding: 20px;">
+    <div class="container">
+        <div class="thank-you-card">
+            <div class="logo-container" style="margin-bottom: 20px;">
+                <img src="/static/logo.jpg" alt="ClashArena Logo" class="logo" style="max-width: 150px;">
+            </div>
+            <div class="success-icon">✓</div>
+            <h1>Registration Successful!</h1>
+            <p class="subtitle">Thank you for joining ClashArena Tournament</p>
+            
+            <div class="info-box">
+                <p><strong>CODM ID:</strong> {{ codm_id }}</p>
+                <p>You will receive match details via email and SMS.</p>
+            </div>
+            
+            <div class="whatsapp-box">
+                <h3>Join Our WhatsApp Group</h3>
+                <p>Get real-time updates and connect with other players</p>
+                <a href="{{ whatsapp_link }}" target="_blank" class="btn-whatsapp">
+                    📱 Join WhatsApp Group
+                </a>
+            </div>
+            
+            <div class="next-steps">
+                <h3>What's Next?</h3>
+                <ul>
+                    <li>✅ Payment confirmed</li>
+                    <li>✅ Registration completed</li>
+                    <li>⏳ Match details will be sent soon</li>
+                    <li>⏳ Tournament begins</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

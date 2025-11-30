@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClashArena - Enter Tournament</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Hero Section -->
+    <div class="hero-section">
+        <!-- Background overlay -->
+        <div class="hero-overlay"></div>
+        
+        <!-- Floating particles -->
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        
+        <!-- Content -->
+        <div class="hero-content">
+            <!-- Logo -->
+            <div class="logo-container">
+                <img src="/static/logo.jpg" alt="ClashArena Logo" class="logo">
+            </div>
+            
+            <!-- Main Heading -->
+            <h1 class="hero-title">
+                Turn Your Gaming Skills Into
+                <span class="gradient-text">Real Money</span>
+            </h1>
+            
+            <p class="hero-subtitle">
+                Compete in Call of Duty Mobile tournaments. Every kill pays. Withdraw instantly to your bank account.
+            </p>
+            
+            <!-- Entry Info Card -->
+            <div class="entry-card">
+                <div class="entry-badge">
+                    <div class="badge-dot"></div>
+                    <span>Tournament Entry</span>
+                </div>
+                <div class="entry-fee-display">
+                    <span class="currency">₦</span>
+                    <span class="amount">{{ entry_fee }}</span>
+                </div>
+                <p class="entry-description">Entry Fee • Win Big Prizes</p>
+            </div>
+            
+            <!-- Entry Form -->
+            <form id="entryForm" class="entry-form">
+                <div class="form-group">
+                    <input 
+                        type="email" 
+                        id="email" 
+                        name="email" 
+                        placeholder="Enter your email address" 
+                        required 
+                        class="email-input"
+                    >
+                </div>
+                <button type="submit" id="enterBtn" class="btn-primary">
+                    <span>Enter Tournament</span>
+                    <svg class="btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                    </svg>
+                </button>
+                <div id="loading" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Redirecting to payment...</p>
+                </div>
+                <div id="errorMsg" class="error-message" style="display: none;"></div>
+            </form>
+            
+            <!-- Trust Indicators -->
+            <div class="trust-indicators">
+                <p class="trust-text">Trusted by thousands of players</p>
+                <div class="trust-badges">
+                    <div class="trust-badge">
+                        <span>Paystack</span>
+                    </div>
+                    <div class="trust-badge">
+                        <span>SSL Secured</span>
+                    </div>
+                </div>
+                <div class="security-features">
+                    <div class="security-item">
+                        <div class="security-dot green"></div>
+                        <span>Instant Withdrawals</span>
+                    </div>
+                    <div class="security-item">
+                        <div class="security-dot blue"></div>
+                        <span>Licensed & Regulated</span>
+                    </div>
+                    <div class="security-item">
+                        <div class="security-dot orange"></div>
+                        <span>PCI Compliant</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/landing.js"></script>
+</body>
+</html>

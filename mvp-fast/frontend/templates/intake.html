@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player Registration - ClashArena</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body style="background: var(--color-black); min-height: 100vh; padding: 20px;">
+    <div class="container">
+        <div class="form-card">
+            <div class="logo-container" style="margin-bottom: 20px;">
+                <img src="/static/logo.jpg" alt="ClashArena Logo" class="logo" style="max-width: 150px;">
+            </div>
+            <h1>Player Registration</h1>
+            <p class="subtitle">Complete your tournament entry</p>
+            <form id="intakeForm">
+                <input type="hidden" id="paymentReference" value="{{ payment_reference }}">
+                
+                <div class="form-group">
+                    <label for="codm_id">CODM ID *</label>
+                    <input type="text" id="codm_id" name="codm_id" required placeholder="Enter your Call of Duty Mobile ID">
+                </div>
+                
+                <div class="form-group">
+                    <label for="contact_phone">Phone Number *</label>
+                    <input type="tel" id="contact_phone" name="contact_phone" required placeholder="+234 800 000 0000">
+                </div>
+                
+                <div class="form-group">
+                    <label for="contact_email">Email Address *</label>
+                    <input type="email" id="contact_email" name="contact_email" required placeholder="your.email@example.com">
+                </div>
+                
+                <div class="form-group">
+                    <label for="region">Region *</label>
+                    <select id="region" name="region" required>
+                        <option value="">Select your region</option>
+                        <option value="Nigeria">Nigeria</option>
+                        <option value="Ghana">Ghana</option>
+                        <option value="Kenya">Kenya</option>
+                        <option value="South Africa">South Africa</option>
+                        <option value="Egypt">Egypt</option>
+                        <option value="Other Africa">Other Africa</option>
+                        <option value="International">International</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="bank_name">Bank Name *</label>
+                    <input type="text" id="bank_name" name="bank_name" required placeholder="e.g., Access Bank, GTBank">
+                </div>
+                
+                <div class="form-group">
+                    <label for="account_number">Account Number *</label>
+                    <input type="text" id="account_number" name="account_number" required placeholder="10-digit account number" minlength="10" maxlength="10">
+                </div>
+                
+                <div class="form-group">
+                    <label for="account_name">Account Name *</label>
+                    <input type="text" id="account_name" name="account_name" required placeholder="Account holder name">
+                </div>
+                
+                <button type="submit" class="btn-primary" id="submitBtn">Submit Registration</button>
+                <div id="errorMsg" class="error-message" style="display: none;"></div>
+                <div id="successMsg" class="success-message" style="display: none;"></div>
+            </form>
+        </div>
+    </div>
+    <script src="/static/js/intake.js"></script>
+</body>
+</html>
+

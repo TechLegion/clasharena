@@ -81,6 +81,14 @@ async def initialize_deposit(
     logger.info(f"Deposit initialization request from user: {current_user.id}")
     
     try:
+        # Check if Paystack is configured
+        if not settings.PAYSTACK_SECRET_KEY or settings.PAYSTACK_SECRET_KEY.strip() == "":
+            logger.error("Paystack secret key is not configured")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Payment service is not configured. Please contact support."
+            )
+        
         # Get user's wallet
         from shared.models import Wallet
         wallet = db.query(Wallet).filter(Wallet.user_id == current_user.id).first()
@@ -93,11 +101,19 @@ async def initialize_deposit(
         
         reference = f"dep_{uuid.uuid4()}"
         
+        # Validate secret key before making request
+        secret_key = settings.PAYSTACK_SECRET_KEY.strip()
+        if not secret_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Payment service configuration error"
+            )
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://api.paystack.co/transaction/initialize",
                 headers={
-                    "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
+                    "Authorization": f"Bearer {secret_key}",
                     "Content-Type": "application/json"
                 },
                 json={
@@ -145,12 +161,21 @@ async def verify_deposit(
         import httpx
         from sqlalchemy.exc import IntegrityError
         
+        # Check if Paystack is configured
+        if not settings.PAYSTACK_SECRET_KEY or settings.PAYSTACK_SECRET_KEY.strip() == "":
+            logger.error("Paystack secret key is not configured")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Payment service is not configured. Please contact support."
+            )
+        
         # Verify with Paystack first
+        secret_key = settings.PAYSTACK_SECRET_KEY.strip()
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"https://api.paystack.co/transaction/verify/{verify_data.reference}",
                 headers={
-                    "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
+                    "Authorization": f"Bearer {secret_key}",
                     "Content-Type": "application/json"
                 }
             )
@@ -465,6 +490,11 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         # Get the raw body
         body = await request.body()
+        
+        # Enhanced logging for webhook debugging
+        logger.info(f"Webhook received from IP: {request.client.host}")
+        logger.info(f"Webhook headers: {dict(request.headers)}")
+        logger.info(f"Webhook body length: {len(body)} bytes")
         
         # Get the signature header
         signature = request.headers.get('x-paystack-signature')

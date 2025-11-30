@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - ClashArena</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body style="background: var(--color-black);">
+    <div class="admin-container">
+        <header class="admin-header">
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <img src="/static/logo.jpg" alt="ClashArena Logo" style="max-width: 60px; height: auto;">
+                <h1 style="margin: 0;">ClashArena Admin Dashboard</h1>
+            </div>
+        </header>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Entries</h3>
+                <p class="stat-number">{{ stats.total_entries }}</p>
+            </div>
+            <div class="stat-card">
+                <h3>Winners</h3>
+                <p class="stat-number">{{ stats.winners }}</p>
+            </div>
+            <div class="stat-card">
+                <h3>Pending Payouts</h3>
+                <p class="stat-number">{{ stats.pending_payouts }}</p>
+            </div>
+            <div class="stat-card">
+                <h3>Completed Payouts</h3>
+                <p class="stat-number">{{ stats.completed_payouts }}</p>
+            </div>
+        </div>
+        
+        <div class="entries-section">
+            <h2>All Entries</h2>
+            <div class="entries-table-container">
+                <table class="entries-table">
+                    <thead>
+                        <tr>
+                            <th>Payment Ref</th>
+                            <th>CODM ID</th>
+                            <th>Contact</th>
+                            <th>Bank Details</th>
+                            <th>Winner</th>
+                            <th>Payout Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in entries %}
+                        <tr>
+                            <td>{{ entry.payment_reference }}</td>
+                            <td>{{ entry.codm_id or "N/A" }}</td>
+                            <td>
+                                <div>{{ entry.contact_phone }}</div>
+                                <div class="small-text">{{ entry.contact_email }}</div>
+                            </td>
+                            <td>
+                                <div>{{ entry.bank_name }}</div>
+                                <div class="small-text">{{ entry.account_number }} - {{ entry.account_name }}</div>
+                            </td>
+                            <td>
+                                <span class="badge {% if entry.is_winner %}badge-success{% else %}badge-default{% endif %}">
+                                    {% if entry.is_winner %}Winner{% else %}No{% endif %}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge badge-{{ entry.payout_status }}">
+                                    {{ entry.payout_status }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    {% if not entry.is_winner %}
+                                    <button class="btn-small btn-success" onclick="markWinner('{{ entry.id }}', true)">
+                                        Mark Winner
+                                    </button>
+                                    {% else %}
+                                    <button class="btn-small btn-warning" onclick="markWinner('{{ entry.id }}', false)">
+                                        Unmark Winner
+                                    </button>
+                                    {% endif %}
+                                    
+                                    {% if entry.is_winner and entry.payout_status == 'pending' %}
+                                    <button class="btn-small btn-primary" onclick="triggerPayout('{{ entry.id }}')">
+                                        Trigger Payout
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/admin.js"></script>
+</body>
+</html>
+
