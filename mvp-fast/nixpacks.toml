@@ -1,13 +1,12 @@
 [phases.setup]
-nixPkgs = ["python311", "curl"]
+nixPkgs = ["python311"]
 
 [phases.install]
 cmds = [
-    "curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py",
-    "python3 get-pip.py",
-    "pip install -r backend/requirements.txt"
+    "python3 -m venv /opt/venv",
+    "source /opt/venv/bin/activate && pip install -r backend/requirements.txt"
 ]
 
 [start]
-cmd = "cd backend && gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT"
+cmd = "cd backend && source /opt/venv/bin/activate && gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT"
 
