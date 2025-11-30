@@ -113,9 +113,22 @@ PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "sk_live_2ab66b1fe6bf3073
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "pk_live_bcace690c5b14739346161a501307ad4f9688e30")
 FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
 PAYMENT_GATEWAY = os.getenv("PAYMENT_GATEWAY", "paystack")  # paystack or flutterwave
-ENTRY_FEE_NGN = float(os.getenv("ENTRY_FEE_NGN", "100"))  # 100 NGN for testing
+ENTRY_FEE_USD = float(os.getenv("ENTRY_FEE_USD", "1.0"))  # $1 USD entry fee
 WHATSAPP_GROUP_LINK = os.getenv("WHATSAPP_GROUP_LINK", "https://chat.whatsapp.com/your-group-link")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+
+def get_entry_fee_ngn() -> float:
+    """Calculate entry fee in NGN based on $1 USD and current exchange rate"""
+    try:
+        dollar_rate = get_live_dollar_rate()
+        entry_fee_ngn = ENTRY_FEE_USD * dollar_rate
+        logger.info(f"Entry fee calculated: ${ENTRY_FEE_USD} USD = ₦{entry_fee_ngn:.2f} NGN (rate: {dollar_rate})")
+        return round(entry_fee_ngn, 2)
+    except Exception as e:
+        logger.error(f"Error calculating entry fee: {e}")
+        # Fallback to default rate if exchange rate fails
+        default_rate = float(os.getenv("DOLLAR_RATE", "1500"))
+        return round(ENTRY_FEE_USD * default_rate, 2)
 
 # Pydantic Models
 class PaymentVerificationRequest(BaseModel):
@@ -258,9 +271,10 @@ def send_notification(entry_id: str, notification_type: str, recipient: str, sub
 @app.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request):
     """Landing page with entry button"""
+    entry_fee_ngn = get_entry_fee_ngn()
     return templates.TemplateResponse("landing.html", {
         "request": request,
-        "entry_fee": ENTRY_FEE_NGN
+        "entry_fee": int(entry_fee_ngn)  # Display as integer (no decimals)
     })
 
 def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict:
@@ -373,6 +387,9 @@ async def initiate_payment(
                     "redirect_url": f"/intake/{existing_entry.payment_reference}"
                 }
         
+        # Calculate entry fee in NGN based on current exchange rate
+        entry_fee_ngn = get_entry_fee_ngn()
+        
         # Generate unique payment reference
         payment_ref = f"CLASH_{secrets.token_hex(8).upper()}"
         
@@ -380,7 +397,7 @@ async def initiate_payment(
         entry = Entry(
             payment_reference=payment_ref,
             payment_status="pending",
-            entry_fee=ENTRY_FEE_NGN,
+            entry_fee=entry_fee_ngn,
             contact_email=email
         )
         db.add(entry)
@@ -392,7 +409,7 @@ async def initiate_payment(
             entry_id=entry.id,
             reference=payment_ref,
             gateway=PAYMENT_GATEWAY,
-            amount=ENTRY_FEE_NGN,
+            amount=entry_fee_ngn,
             currency="NGN",
             status="pending"
         )
@@ -403,7 +420,7 @@ async def initiate_payment(
         if PAYMENT_GATEWAY == "paystack":
             if not PAYSTACK_SECRET_KEY:
                 raise HTTPException(status_code=500, detail="Paystack secret key not configured")
-            payment_result = initiate_paystack_payment(ENTRY_FEE_NGN, email, payment_ref)
+            payment_result = initiate_paystack_payment(entry_fee_ngn, email, payment_ref)
             if payment_result.get("success"):
                 checkout_url = payment_result["authorization_url"]
             else:
@@ -411,7 +428,7 @@ async def initiate_payment(
         else:  # flutterwave
             if not FLUTTERWAVE_SECRET_KEY:
                 raise HTTPException(status_code=500, detail="Flutterwave secret key not configured")
-            payment_result = initiate_flutterwave_payment(ENTRY_FEE_NGN, email, payment_ref)
+            payment_result = initiate_flutterwave_payment(entry_fee_ngn, email, payment_ref)
             if payment_result.get("success"):
                 checkout_url = payment_result["link"]
             else:
