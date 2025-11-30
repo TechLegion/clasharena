@@ -1,0 +1,6 @@
+# Root requirements file for Railway detection
+# This ensures Python is installed during build
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+

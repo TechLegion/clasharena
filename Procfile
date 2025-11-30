@@ -1,3 +1,1 @@
-web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-worker: celery -A app.core.celery_app:celery_app worker --loglevel=info --concurrency=4 --queues=auth,wallet,matches,referrals,admin,bulk_payments
-beat: celery -A app.core.celery_app:celery_app beat --loglevel=info
+web: cd mvp-fast/backend && pip install -r requirements.txt && gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT
