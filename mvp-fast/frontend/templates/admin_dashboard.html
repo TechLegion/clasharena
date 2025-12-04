@@ -19,13 +19,13 @@
             <div class="stat-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
                 <h3>Total Registrations</h3>
                 <p class="stat-number" id="total-registrations">{{ stats.total_registrations }}</p>
-                {% if stats.milestone_100_reached %}
+                {% if stats.milestone_reached %}
                 <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.2); border-radius: 5px;">
-                    <span style="color: #ffd700; font-weight: bold;">🎉 Milestone: 100 Users Reached!</span>
+                    <span style="color: #ffd700; font-weight: bold;">🎉 Milestone: {{ stats.milestone_threshold }} Users Reached!</span>
                 </div>
                 {% else %}
                 <div style="margin-top: 10px; font-size: 0.9em; color: rgba(255,255,255,0.8);">
-                    <span id="remaining-to-100">{{ 100 - stats.total_registrations }}</span> more to reach 100
+                    <span id="remaining-to-milestone">{{ stats.milestone_threshold - stats.total_registrations }}</span> more to reach {{ stats.milestone_threshold }}
                 </div>
                 {% endif %}
             </div>

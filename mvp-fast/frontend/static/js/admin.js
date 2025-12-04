@@ -117,15 +117,16 @@ async function refreshRegistrationCount() {
                 totalRegistrationsEl.textContent = data.total_registrations;
             }
             
-            if (remainingTo100El && !data.milestone_100_reached) {
-                remainingTo100El.textContent = data.remaining_to_100;
+            const remainingToMilestoneEl = document.getElementById('remaining-to-milestone');
+            if (remainingToMilestoneEl && !data.milestone_reached) {
+                remainingToMilestoneEl.textContent = data.remaining_to_milestone;
             }
             
             // If milestone reached, reload page to show milestone notification
-            if (data.milestone_100_reached) {
-                const milestoneNotified = sessionStorage.getItem('milestone_100_notified');
+            if (data.milestone_reached) {
+                const milestoneNotified = sessionStorage.getItem(`milestone_${data.milestone_threshold}_notified`);
                 if (!milestoneNotified) {
-                    sessionStorage.setItem('milestone_100_notified', 'true');
+                    sessionStorage.setItem(`milestone_${data.milestone_threshold}_notified`, 'true');
                     // Optionally reload to show milestone banner
                     // location.reload();
                 }

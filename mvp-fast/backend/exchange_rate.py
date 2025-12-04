@@ -15,16 +15,29 @@ _cached_rate = None
 _cache_timestamp = None
 _cache_duration = timedelta(hours=1)  # Cache for 1 hour
 
-# Default fallback rate
-DEFAULT_DOLLAR_RATE = float(os.getenv("DOLLAR_RATE", "1500"))
+# Default fallback rate (100 NGN for testing)
+DEFAULT_DOLLAR_RATE = float(os.getenv("DOLLAR_RATE", "100"))
+
+# Check if we should use fixed rate (for testing)
+# Default to true for testing, set USE_FIXED_RATE=false to use live rates
+USE_FIXED_RATE = os.getenv("USE_FIXED_RATE", "true").lower() == "true"
 
 def get_live_dollar_rate() -> float:
     """
     Get live USD to NGN exchange rate
     Returns cached rate if available and not expired
     Falls back to default rate if API fails
+    If USE_FIXED_RATE=true, always returns fixed rate
     """
     global _cached_rate, _cache_timestamp
+    
+    # If fixed rate mode is enabled, always return the fixed rate (ignore cache)
+    if USE_FIXED_RATE:
+        # Clear cache to ensure we don't use old live rates
+        _cached_rate = None
+        _cache_timestamp = None
+        logger.info(f"Using fixed exchange rate (testing mode): {DEFAULT_DOLLAR_RATE} NGN")
+        return DEFAULT_DOLLAR_RATE
     
     # Check if we have a valid cached rate
     if _cached_rate and _cache_timestamp:

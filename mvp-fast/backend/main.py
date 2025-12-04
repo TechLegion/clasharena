@@ -57,7 +57,7 @@ try:
     from exchange_rate import get_live_dollar_rate
 except ImportError:
     logger.warning("Exchange rate module not available. Using default rate.")
-    def get_live_dollar_rate(): return float(os.getenv("DOLLAR_RATE", "1500"))
+    def get_live_dollar_rate(): return float(os.getenv("DOLLAR_RATE", "100"))
 
 app = FastAPI(title="ClashArena MVP", version="1.0.0")
 
@@ -117,6 +117,8 @@ ENTRY_FEE_USD = float(os.getenv("ENTRY_FEE_USD", "1.0"))  # $1 USD entry fee
 WHATSAPP_GROUP_LINK = os.getenv("WHATSAPP_GROUP_LINK", "https://chat.whatsapp.com/your-group-link")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@clasharena.com")
+# Registration milestone for testing (set to 10 for testing phase, change to 100 for production)
+REGISTRATION_MILESTONE = int(os.getenv("REGISTRATION_MILESTONE", "10"))
 
 def get_entry_fee_ngn() -> float:
     """Calculate entry fee in NGN based on $1 USD and current exchange rate"""
@@ -128,7 +130,7 @@ def get_entry_fee_ngn() -> float:
     except Exception as e:
         logger.error(f"Error calculating entry fee: {e}")
         # Fallback to default rate if exchange rate fails
-        default_rate = float(os.getenv("DOLLAR_RATE", "1500"))
+        default_rate = float(os.getenv("DOLLAR_RATE", "100"))
         return round(ENTRY_FEE_USD * default_rate, 2)
 
 # Pydantic Models
@@ -294,7 +296,7 @@ def set_whatsapp_link(db: Session, link: str, admin_id: str = None):
     logger.info(f"WhatsApp link updated to: {link}")
 
 def check_registration_milestone(db: Session):
-    """Check if registration milestone (100 users) has been reached and notify admin"""
+    """Check if registration milestone has been reached and notify admin"""
     try:
         # Count completed registrations (entries with payment completed and codm_id filled)
         total_registrations = db.query(Entry).filter(
@@ -302,18 +304,18 @@ def check_registration_milestone(db: Session):
             Entry.codm_id.isnot(None)
         ).count()
         
-        # Check if we've reached 100 users
-        if total_registrations >= 100:
+        # Check if we've reached the milestone threshold
+        if total_registrations >= REGISTRATION_MILESTONE:
             # Check if we've already notified for this milestone
             milestone = db.query(RegistrationMilestone).filter(
-                RegistrationMilestone.milestone_count == 100,
+                RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
                 RegistrationMilestone.notified == True
             ).first()
             
             if not milestone:
                 # Create milestone record
                 milestone = RegistrationMilestone(
-                    milestone_count=100,
+                    milestone_count=REGISTRATION_MILESTONE,
                     notified=False
                 )
                 db.add(milestone)
@@ -324,8 +326,8 @@ def check_registration_milestone(db: Session):
                     entry_id=None,
                     notification_type="email",
                     recipient=ADMIN_EMAIL,
-                    subject="🎉 Milestone Reached: 100 Users Registered!",
-                    message=f"Congratulations! Your tournament has reached 100 registered users. Total registrations: {total_registrations}",
+                    subject=f"🎉 Milestone Reached: {REGISTRATION_MILESTONE} Users Registered!",
+                    message=f"Congratulations! Your tournament has reached {REGISTRATION_MILESTONE} registered users. Total registrations: {total_registrations}",
                     db=db
                 )
                 
@@ -334,7 +336,7 @@ def check_registration_milestone(db: Session):
                 milestone.notification_sent_at = datetime.utcnow()
                 db.commit()
                 
-                logger.info(f"🎉 Milestone reached: 100 users registered! Total: {total_registrations}")
+                logger.info(f"🎉 Milestone reached: {REGISTRATION_MILESTONE} users registered! Total: {total_registrations}")
                 return True
         
         return False
@@ -752,6 +754,12 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     # Get WhatsApp link from database
     whatsapp_link = get_whatsapp_link(db)
     
+    # Check if milestone reached
+    milestone = db.query(RegistrationMilestone).filter(
+        RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
+        RegistrationMilestone.notified == True
+    ).first()
+    
     stats = {
         "total_entries": len(entries),
         "total_registrations": total_registrations,
@@ -759,7 +767,8 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
         "pending_payouts": len([e for e in entries if e.is_winner and e.payout_status == "pending"]),
         "completed_payouts": len([e for e in entries if e.payout_status == "completed"]),
         "whatsapp_link": whatsapp_link,
-        "milestone_100_reached": total_registrations >= 100
+        "milestone_threshold": REGISTRATION_MILESTONE,
+        "milestone_reached": milestone is not None
     }
     
     return templates.TemplateResponse("admin_dashboard.html", {
@@ -894,7 +903,7 @@ async def get_exchange_rate_info():
         return {
             "success": False,
             "error": str(e),
-            "current_rate": float(os.getenv("DOLLAR_RATE", "1500"))
+            "current_rate": float(os.getenv("DOLLAR_RATE", "100"))
         }
 
 @app.post("/api/exchange-rate/refresh")
@@ -1005,9 +1014,9 @@ async def get_admin_stats(db: Session = Depends(get_db)):
         # Get WhatsApp link
         whatsapp_link = get_whatsapp_link(db)
         
-        # Check if 100 milestone reached
-        milestone_100 = db.query(RegistrationMilestone).filter(
-            RegistrationMilestone.milestone_count == 100,
+        # Check if milestone reached
+        milestone = db.query(RegistrationMilestone).filter(
+            RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
             RegistrationMilestone.notified == True
         ).first()
         
@@ -1019,8 +1028,9 @@ async def get_admin_stats(db: Session = Depends(get_db)):
                 "winners": winners,
                 "pending_payouts": pending_payouts,
                 "whatsapp_link": whatsapp_link,
-                "milestone_100_reached": milestone_100 is not None,
-                "milestone_100_notified_at": milestone_100.notification_sent_at.isoformat() if milestone_100 else None
+                "milestone_threshold": REGISTRATION_MILESTONE,
+                "milestone_reached": milestone is not None,
+                "milestone_notified_at": milestone.notification_sent_at.isoformat() if milestone else None
             }
         }
     except Exception as e:
@@ -1073,8 +1083,9 @@ async def get_registration_count(db: Session = Depends(get_db)):
         return {
             "success": True,
             "total_registrations": total_registrations,
-            "milestone_100_reached": total_registrations >= 100,
-            "remaining_to_100": max(0, 100 - total_registrations)
+            "milestone_threshold": REGISTRATION_MILESTONE,
+            "milestone_reached": total_registrations >= REGISTRATION_MILESTONE,
+            "remaining_to_milestone": max(0, REGISTRATION_MILESTONE - total_registrations)
         }
     except Exception as e:
         logger.error(f"Error getting registration count: {e}")
@@ -1089,5 +1100,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
