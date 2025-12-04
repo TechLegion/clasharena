@@ -16,6 +16,19 @@
         </header>
         
         <div class="stats-grid">
+            <div class="stat-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                <h3>Total Registrations</h3>
+                <p class="stat-number" id="total-registrations">{{ stats.total_registrations }}</p>
+                {% if stats.milestone_100_reached %}
+                <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.2); border-radius: 5px;">
+                    <span style="color: #ffd700; font-weight: bold;">🎉 Milestone: 100 Users Reached!</span>
+                </div>
+                {% else %}
+                <div style="margin-top: 10px; font-size: 0.9em; color: rgba(255,255,255,0.8);">
+                    <span id="remaining-to-100">{{ 100 - stats.total_registrations }}</span> more to reach 100
+                </div>
+                {% endif %}
+            </div>
             <div class="stat-card">
                 <h3>Total Entries</h3>
                 <p class="stat-number">{{ stats.total_entries }}</p>
@@ -31,6 +44,31 @@
             <div class="stat-card">
                 <h3>Completed Payouts</h3>
                 <p class="stat-number">{{ stats.completed_payouts }}</p>
+            </div>
+        </div>
+        
+        <!-- WhatsApp Link Management Section -->
+        <div class="settings-section" style="margin: 30px 0; padding: 20px; background: var(--color-dark-gray); border-radius: 10px;">
+            <h2 style="margin-top: 0; color: var(--color-white);">Settings</h2>
+            <div class="whatsapp-link-section" style="margin-top: 20px;">
+                <h3 style="color: var(--color-white); margin-bottom: 15px;">WhatsApp Group Link</h3>
+                <div style="display: flex; gap: 10px; align-items: flex-start;">
+                    <input 
+                        type="text" 
+                        id="whatsapp-link-input" 
+                        value="{{ stats.whatsapp_link }}" 
+                        placeholder="https://chat.whatsapp.com/your-group-link"
+                        style="flex: 1; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
+                    />
+                    <button 
+                        class="btn-primary" 
+                        onclick="updateWhatsAppLink()"
+                        style="padding: 12px 24px; white-space: nowrap;"
+                    >
+                        Update Link
+                    </button>
+                </div>
+                <div id="whatsapp-link-message" style="margin-top: 10px; font-size: 14px;"></div>
             </div>
         </div>
         

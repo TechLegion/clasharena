@@ -13,6 +13,7 @@ GOOGLE_SHEETS_ENABLED = os.getenv("GOOGLE_SHEETS_ENABLED", "false").lower() == "
 SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID", "")
 SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Entries")
 CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+MAX_ENTRIES_PER_SHEET = int(os.getenv("MAX_ENTRIES_PER_SHEET", "100"))  # Create new sheet after this many entries
 
 try:
     from google.oauth2.service_account import Credentials
@@ -91,6 +92,145 @@ try:
             logger.error(f"Error ensuring header row: {e}")
             return False
     
+    def count_entries_in_sheet(spreadsheet_id: str, sheet_name: str) -> int:
+        """Count the number of data entries (excluding header) in a sheet"""
+        service = get_sheets_service()
+        if not service:
+            return 0
+        
+        try:
+            # Get all data from the sheet
+            result = service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{sheet_name}!A:N"
+            ).execute()
+            
+            rows = result.get('values', [])
+            
+            # Count rows with actual data (excluding header)
+            entry_count = 0
+            for row in rows:
+                if row and len(row) > 0:
+                    # Check if row has any non-empty cells (skip header row)
+                    has_data = any(cell.strip() if isinstance(cell, str) else cell for cell in row)
+                    if has_data:
+                        # Check if it's not the header row (header has "Time" in first column)
+                        if len(row) > 0 and row[0] != "Time":
+                            entry_count += 1
+            
+            return entry_count
+        except Exception as e:
+            logger.error(f"Error counting entries: {e}")
+            return 0
+    
+    def create_new_sheet(spreadsheet_id: str, base_sheet_name: str) -> Optional[str]:
+        """Create a new sheet and return its name"""
+        service = get_sheets_service()
+        if not service:
+            return None
+        
+        try:
+            # Get all existing sheets to find the next number
+            spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            sheets = spreadsheet.get('sheets', [])
+            
+            # Find existing sheets with the same base name
+            existing_numbers = []
+            for sheet in sheets:
+                sheet_title = sheet['properties']['title']
+                if sheet_title.startswith(base_sheet_name):
+                    # Try to extract number from names like "8am to 9am - Part 2"
+                    if " - Part " in sheet_title:
+                        try:
+                            part_num = int(sheet_title.split(" - Part ")[1])
+                            existing_numbers.append(part_num)
+                        except:
+                            pass
+                    elif sheet_title == base_sheet_name:
+                        existing_numbers.append(1)  # Original sheet is part 1
+            
+            # Determine next part number
+            if existing_numbers:
+                next_part = max(existing_numbers) + 1
+            else:
+                next_part = 2  # First new sheet is Part 2
+            
+            new_sheet_name = f"{base_sheet_name} - Part {next_part}"
+            
+            # Create the new sheet
+            request_body = {
+                'requests': [{
+                    'addSheet': {
+                        'properties': {
+                            'title': new_sheet_name
+                        }
+                    }
+                }]
+            }
+            
+            response = service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body=request_body
+            ).execute()
+            
+            logger.info(f"Created new sheet: {new_sheet_name}")
+            
+            # Create header row in the new sheet
+            ensure_header_row(spreadsheet_id, new_sheet_name)
+            
+            return new_sheet_name
+            
+        except Exception as e:
+            logger.error(f"Error creating new sheet: {e}")
+            return None
+    
+    def get_active_sheet_name() -> str:
+        """Get the active sheet name, creating a new one if current sheet has 100+ entries"""
+        if not GOOGLE_SHEETS_ENABLED or not SPREADSHEET_ID:
+            return SHEET_NAME
+        
+        # Get base sheet name (original name without " - Part X")
+        base_name = SHEET_NAME.split(" - Part ")[0] if " - Part " in SHEET_NAME else SHEET_NAME
+        
+        # Get all sheets with the same base name
+        service = get_sheets_service()
+        if not service:
+            return SHEET_NAME
+        
+        try:
+            spreadsheet = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+            sheets = spreadsheet.get('sheets', [])
+            
+            # Find all sheets with the same base name
+            matching_sheets = []
+            for sheet in sheets:
+                sheet_title = sheet['properties']['title']
+                if sheet_title == base_name or sheet_title.startswith(f"{base_name} - Part "):
+                    matching_sheets.append(sheet_title)
+            
+            # Sort sheets to find the latest one
+            matching_sheets.sort()
+            current_sheet = matching_sheets[-1] if matching_sheets else SHEET_NAME
+            
+            # Count entries in the current/latest sheet
+            entry_count = count_entries_in_sheet(SPREADSHEET_ID, current_sheet)
+            
+            # If we've reached the limit, create a new sheet
+            if entry_count >= MAX_ENTRIES_PER_SHEET:
+                logger.info(f"Sheet '{current_sheet}' has {entry_count} entries (limit: {MAX_ENTRIES_PER_SHEET}). Creating new sheet...")
+                new_sheet_name = create_new_sheet(SPREADSHEET_ID, base_name)
+                if new_sheet_name:
+                    logger.info(f"Created and switched to new sheet: {new_sheet_name}")
+                    return new_sheet_name
+                else:
+                    logger.warning("Failed to create new sheet, continuing with current sheet")
+            
+            return current_sheet
+            
+        except Exception as e:
+            logger.error(f"Error getting active sheet: {e}")
+            return SHEET_NAME
+    
     def save_entry_to_sheets(entry_data: Dict) -> bool:
         """
         Save entry data to Google Sheets
@@ -111,8 +251,11 @@ try:
             return False
         
         try:
+            # Check if we need to create a new sheet (after 100 entries)
+            current_sheet = get_active_sheet_name()
+            
             # Ensure header row exists
-            ensure_header_row(SPREADSHEET_ID, SHEET_NAME)
+            ensure_header_row(SPREADSHEET_ID, current_sheet)
             
             # Prepare row data matching CSV structure
             # Columns: Time, Gamer ID Name, Gamer Email, Whatsapp Number, Region, 
@@ -156,7 +299,7 @@ try:
             # Get all data in the sheet to find the true last row
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!A:N"
+                range=f"{current_sheet}!A:N"
             ).execute()
             
             existing_rows = result.get('values', [])
@@ -180,12 +323,12 @@ try:
             # Append row to sheet at specific position (right after last data row)
             service.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!A{next_row}",
+                range=f"{current_sheet}!A{next_row}",
                 valueInputOption='RAW',
                 body={'values': [row]}
             ).execute()
             
-            logger.info(f"Entry saved to Google Sheets: {entry_data.get('payment_reference')}")
+            logger.info(f"Entry saved to Google Sheets ({current_sheet}): {entry_data.get('payment_reference')}")
             return True
             
         except HttpError as e:
@@ -214,11 +357,14 @@ try:
             return False
         
         try:
+            # Get current active sheet name
+            current_sheet = get_active_sheet_name()
+            
             # Find the row with matching CODM ID (Gamer ID Name) in column B
             # Since payment_reference might not be in the sheet, we'll search by CODM ID or email
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!B:C"  # Columns B (Gamer ID Name) and C (Gamer Email)
+                range=f"{current_sheet}!B:C"  # Columns B (Gamer ID Name) and C (Gamer Email)
             ).execute()
             
             values = result.get('values', [])
@@ -283,7 +429,7 @@ try:
                         value = f"₦{float(entry_fee_ngn):,.2f}" if entry_fee_ngn else "₦0.00"
                     
                     update_requests.append({
-                        "range": f"{SHEET_NAME}!{column}{row_index}",
+                        "range": f"{current_sheet}!{column}{row_index}",
                         "values": [[str(value)]]
                     })
             
@@ -313,6 +459,9 @@ except ImportError:
     
     def get_sheets_service():
         return None
+    
+    def get_active_sheet_name() -> str:
+        return SHEET_NAME
     
     def save_entry_to_sheets(entry_data: Dict) -> bool:
         return False

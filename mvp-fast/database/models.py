@@ -98,3 +98,26 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
 
+class AppSettings(Base):
+    """Application settings"""
+    __tablename__ = "app_settings"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    key = Column(String, unique=True, nullable=False, index=True)
+    value = Column(Text, nullable=False)
+    description = Column(String, nullable=True)
+    updated_by = Column(String, nullable=True)  # admin user id
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class RegistrationMilestone(Base):
+    """Track registration milestones (e.g., 100 users)"""
+    __tablename__ = "registration_milestones"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    milestone_count = Column(Integer, nullable=False)  # e.g., 100, 200, 500
+    reached_at = Column(DateTime, default=datetime.utcnow)
+    notified = Column(Boolean, default=False)
+    notification_sent_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

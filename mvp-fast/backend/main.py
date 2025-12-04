@@ -32,7 +32,7 @@ if str(root_dir) not in sys.path:
 # Import database modules
 try:
     from database.db import get_db, init_db
-    from database.models import Entry, Payment, Payout, AdminUser, Notification
+    from database.models import Entry, Payment, Payout, AdminUser, Notification, AppSettings, RegistrationMilestone
 except ImportError as e:
     print(f"Error importing database modules: {e}")
     print(f"Python path: {sys.path}")
@@ -116,6 +116,7 @@ PAYMENT_GATEWAY = os.getenv("PAYMENT_GATEWAY", "paystack")  # paystack or flutte
 ENTRY_FEE_USD = float(os.getenv("ENTRY_FEE_USD", "1.0"))  # $1 USD entry fee
 WHATSAPP_GROUP_LINK = os.getenv("WHATSAPP_GROUP_LINK", "https://chat.whatsapp.com/your-group-link")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@clasharena.com")
 
 def get_entry_fee_ngn() -> float:
     """Calculate entry fee in NGN based on $1 USD and current exchange rate"""
@@ -266,6 +267,80 @@ def send_notification(entry_id: str, notification_type: str, recipient: str, sub
     db.commit()
     # TODO: Integrate with actual email/WhatsApp/SMS services
     logger.info(f"Notification created: {notification_type} to {recipient}")
+
+def get_whatsapp_link(db: Session) -> str:
+    """Get WhatsApp group link from database or environment"""
+    setting = db.query(AppSettings).filter(AppSettings.key == "whatsapp_group_link").first()
+    if setting:
+        return setting.value
+    return WHATSAPP_GROUP_LINK
+
+def set_whatsapp_link(db: Session, link: str, admin_id: str = None):
+    """Set WhatsApp group link in database"""
+    setting = db.query(AppSettings).filter(AppSettings.key == "whatsapp_group_link").first()
+    if setting:
+        setting.value = link
+        setting.updated_by = admin_id
+        setting.updated_at = datetime.utcnow()
+    else:
+        setting = AppSettings(
+            key="whatsapp_group_link",
+            value=link,
+            description="WhatsApp group link for tournament participants",
+            updated_by=admin_id
+        )
+        db.add(setting)
+    db.commit()
+    logger.info(f"WhatsApp link updated to: {link}")
+
+def check_registration_milestone(db: Session):
+    """Check if registration milestone (100 users) has been reached and notify admin"""
+    try:
+        # Count completed registrations (entries with payment completed and codm_id filled)
+        total_registrations = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None)
+        ).count()
+        
+        # Check if we've reached 100 users
+        if total_registrations >= 100:
+            # Check if we've already notified for this milestone
+            milestone = db.query(RegistrationMilestone).filter(
+                RegistrationMilestone.milestone_count == 100,
+                RegistrationMilestone.notified == True
+            ).first()
+            
+            if not milestone:
+                # Create milestone record
+                milestone = RegistrationMilestone(
+                    milestone_count=100,
+                    notified=False
+                )
+                db.add(milestone)
+                db.commit()
+                
+                # Send notification to admin
+                send_notification(
+                    entry_id=None,
+                    notification_type="email",
+                    recipient=ADMIN_EMAIL,
+                    subject="🎉 Milestone Reached: 100 Users Registered!",
+                    message=f"Congratulations! Your tournament has reached 100 registered users. Total registrations: {total_registrations}",
+                    db=db
+                )
+                
+                # Mark as notified
+                milestone.notified = True
+                milestone.notification_sent_at = datetime.utcnow()
+                db.commit()
+                
+                logger.info(f"🎉 Milestone reached: 100 users registered! Total: {total_registrations}")
+                return True
+        
+        return False
+    except Exception as e:
+        logger.error(f"Error checking registration milestone: {e}")
+        return False
 
 # Routes
 @app.get("/", response_class=HTMLResponse)
@@ -572,6 +647,9 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
         except Exception as e:
             logger.warning(f"Failed to save to Google Sheets: {e}")
         
+        # Get current WhatsApp link from database
+        whatsapp_link = get_whatsapp_link(db)
+        
         # Send confirmation notifications
         send_notification(
             entry.id,
@@ -587,9 +665,12 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             "whatsapp",
             data.contact_phone,
             "ClashArena Registration",
-            f"Welcome! Join our WhatsApp group: {WHATSAPP_GROUP_LINK}",
+            f"Welcome! Join our WhatsApp group: {whatsapp_link}",
             db
         )
+        
+        # Check for registration milestone (100 users)
+        check_registration_milestone(db)
         
         return {
             "success": True,
@@ -611,9 +692,12 @@ async def thank_you_page(request: Request, payment_reference: str, db: Session =
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     
+    # Get WhatsApp link from database
+    whatsapp_link = get_whatsapp_link(db)
+    
     return templates.TemplateResponse("thank_you.html", {
         "request": request,
-        "whatsapp_link": WHATSAPP_GROUP_LINK,
+        "whatsapp_link": whatsapp_link,
         "codm_id": entry.codm_id
     })
 
@@ -659,11 +743,23 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     """Admin dashboard"""
     entries = db.query(Entry).filter(Entry.payment_status == "completed").order_by(Entry.created_at.desc()).all()
     
+    # Count total registrations (entries with payment completed and codm_id filled)
+    total_registrations = db.query(Entry).filter(
+        Entry.payment_status == "completed",
+        Entry.codm_id.isnot(None)
+    ).count()
+    
+    # Get WhatsApp link from database
+    whatsapp_link = get_whatsapp_link(db)
+    
     stats = {
         "total_entries": len(entries),
+        "total_registrations": total_registrations,
         "winners": len([e for e in entries if e.is_winner]),
         "pending_payouts": len([e for e in entries if e.is_winner and e.payout_status == "pending"]),
-        "completed_payouts": len([e for e in entries if e.payout_status == "completed"])
+        "completed_payouts": len([e for e in entries if e.payout_status == "completed"]),
+        "whatsapp_link": whatsapp_link,
+        "milestone_100_reached": total_registrations >= 100
     }
     
     return templates.TemplateResponse("admin_dashboard.html", {
@@ -879,6 +975,113 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
         import traceback
         logger.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
+
+# Admin Settings Routes
+class UpdateWhatsAppLinkRequest(BaseModel):
+    whatsapp_link: str = Field(..., min_length=1, description="WhatsApp group link")
+
+@app.get("/api/admin/stats")
+async def get_admin_stats(db: Session = Depends(get_db)):
+    """Get admin statistics including registration count"""
+    try:
+        # Count total registrations (entries with payment completed and codm_id filled)
+        total_registrations = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None)
+        ).count()
+        
+        # Count all entries
+        total_entries = db.query(Entry).filter(Entry.payment_status == "completed").count()
+        
+        # Count winners
+        winners = db.query(Entry).filter(Entry.is_winner == True).count()
+        
+        # Count pending payouts
+        pending_payouts = db.query(Entry).filter(
+            Entry.is_winner == True,
+            Entry.payout_status == "pending"
+        ).count()
+        
+        # Get WhatsApp link
+        whatsapp_link = get_whatsapp_link(db)
+        
+        # Check if 100 milestone reached
+        milestone_100 = db.query(RegistrationMilestone).filter(
+            RegistrationMilestone.milestone_count == 100,
+            RegistrationMilestone.notified == True
+        ).first()
+        
+        return {
+            "success": True,
+            "stats": {
+                "total_registrations": total_registrations,
+                "total_entries": total_entries,
+                "winners": winners,
+                "pending_payouts": pending_payouts,
+                "whatsapp_link": whatsapp_link,
+                "milestone_100_reached": milestone_100 is not None,
+                "milestone_100_notified_at": milestone_100.notification_sent_at.isoformat() if milestone_100 else None
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting admin stats: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.post("/api/admin/update-whatsapp-link")
+async def update_whatsapp_link(
+    data: UpdateWhatsAppLinkRequest,
+    db: Session = Depends(get_db)
+):
+    """Update WhatsApp group link (Admin only)"""
+    try:
+        # In production, add proper admin authentication here
+        # For now, we'll allow any authenticated admin
+        
+        # Validate WhatsApp link format
+        if not data.whatsapp_link.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="WhatsApp link must be a valid URL")
+        
+        # Update WhatsApp link
+        set_whatsapp_link(db, data.whatsapp_link)
+        
+        logger.info(f"WhatsApp link updated to: {data.whatsapp_link}")
+        
+        return {
+            "success": True,
+            "message": "WhatsApp link updated successfully",
+            "whatsapp_link": data.whatsapp_link
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating WhatsApp link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/registration-count")
+async def get_registration_count(db: Session = Depends(get_db)):
+    """Get current registration count"""
+    try:
+        # Count total registrations (entries with payment completed and codm_id filled)
+        total_registrations = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None)
+        ).count()
+        
+        return {
+            "success": True,
+            "total_registrations": total_registrations,
+            "milestone_100_reached": total_registrations >= 100,
+            "remaining_to_100": max(0, 100 - total_registrations)
+        }
+    except Exception as e:
+        logger.error(f"Error getting registration count: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 @app.get("/health")
 async def health_check():
