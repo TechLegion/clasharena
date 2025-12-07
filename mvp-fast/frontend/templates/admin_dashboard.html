@@ -47,9 +47,11 @@
             </div>
         </div>
         
-        <!-- WhatsApp Link Management Section -->
+        <!-- Settings Section -->
         <div class="settings-section" style="margin: 30px 0; padding: 20px; background: var(--color-dark-gray); border-radius: 10px;">
             <h2 style="margin-top: 0; color: var(--color-white);">Settings</h2>
+            
+            <!-- WhatsApp Link Management -->
             <div class="whatsapp-link-section" style="margin-top: 20px;">
                 <h3 style="color: var(--color-white); margin-bottom: 15px;">WhatsApp Group Link</h3>
                 <div style="display: flex; gap: 10px; align-items: flex-start;">
@@ -69,6 +71,56 @@
                     </button>
                 </div>
                 <div id="whatsapp-link-message" style="margin-top: 10px; font-size: 14px;"></div>
+            </div>
+            
+            <!-- Admin User Management -->
+            <div class="admin-users-section" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--color-gray);">
+                <h3 style="color: var(--color-white); margin-bottom: 15px;">Create New Admin User</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                    <div>
+                        <label style="display: block; color: var(--color-white); margin-bottom: 5px; font-size: 14px;">Username</label>
+                        <input 
+                            type="text" 
+                            id="admin-username-input" 
+                            placeholder="Enter username (min 3 characters)"
+                            style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
+                        />
+                    </div>
+                    <div>
+                        <label style="display: block; color: var(--color-white); margin-bottom: 5px; font-size: 14px;">Email (Optional)</label>
+                        <input 
+                            type="email" 
+                            id="admin-email-input" 
+                            placeholder="admin@example.com"
+                            style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
+                        />
+                    </div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; color: var(--color-white); margin-bottom: 5px; font-size: 14px;">Password</label>
+                    <input 
+                        type="password" 
+                        id="admin-password-input" 
+                        placeholder="Enter password (min 6 characters)"
+                        style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
+                    />
+                </div>
+                <button 
+                    class="btn-primary" 
+                    onclick="createAdminUser()"
+                    style="padding: 12px 24px;"
+                >
+                    Create Admin User
+                </button>
+                <div id="admin-user-message" style="margin-top: 10px; font-size: 14px;"></div>
+            </div>
+            
+            <!-- Existing Admin Users List -->
+            <div class="admin-users-list" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--color-gray);">
+                <h3 style="color: var(--color-white); margin-bottom: 15px;">Existing Admin Users</h3>
+                <div id="admin-users-container" style="color: var(--color-white);">
+                    <p style="color: rgba(255,255,255,0.7);">Loading admin users...</p>
+                </div>
             </div>
         </div>
         

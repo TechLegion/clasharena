@@ -1073,6 +1073,11 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
 class UpdateWhatsAppLinkRequest(BaseModel):
     whatsapp_link: str = Field(..., min_length=1, description="WhatsApp group link")
 
+class CreateAdminUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, description="Admin username")
+    email: Optional[EmailStr] = None
+    password: str = Field(..., min_length=6, description="Admin password")
+
 @app.get("/api/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db)):
     """Get admin statistics including registration count"""
@@ -1173,6 +1178,79 @@ async def get_registration_count(db: Session = Depends(get_db)):
         }
     except Exception as e:
         logger.error(f"Error getting registration count: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.post("/api/admin/create-admin-user")
+async def create_admin_user(
+    data: CreateAdminUserRequest,
+    db: Session = Depends(get_db)
+):
+    """Create a new admin user (Admin only)"""
+    try:
+        # Check if username already exists
+        existing_username = db.query(AdminUser).filter(AdminUser.username == data.username).first()
+        if existing_username:
+            raise HTTPException(status_code=400, detail=f"Username '{data.username}' already exists")
+        
+        # Check if email already exists (if provided)
+        if data.email:
+            existing_email = db.query(AdminUser).filter(AdminUser.email == data.email).first()
+            if existing_email:
+                raise HTTPException(status_code=400, detail=f"Email '{data.email}' already exists")
+        
+        # Create new admin user
+        admin = AdminUser(
+            username=data.username,
+            password_hash=hash_password(data.password),
+            email=data.email,
+            is_active=True
+        )
+        
+        db.add(admin)
+        db.commit()
+        db.refresh(admin)
+        
+        logger.info(f"New admin user created: {data.username}")
+        
+        return {
+            "success": True,
+            "message": f"Admin user '{data.username}' created successfully",
+            "admin_id": admin.id,
+            "username": admin.username,
+            "email": admin.email
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating admin user: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create admin user: {str(e)}")
+
+@app.get("/api/admin/admin-users")
+async def get_admin_users(db: Session = Depends(get_db)):
+    """Get list of all admin users"""
+    try:
+        admins = db.query(AdminUser).order_by(AdminUser.created_at.desc()).all()
+        
+        return {
+            "success": True,
+            "admins": [
+                {
+                    "id": admin.id,
+                    "username": admin.username,
+                    "email": admin.email,
+                    "is_active": admin.is_active,
+                    "created_at": admin.created_at.isoformat() if admin.created_at else None
+                }
+                for admin in admins
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error getting admin users: {e}")
         return {
             "success": False,
             "error": str(e)

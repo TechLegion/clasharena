@@ -136,6 +136,106 @@ async function refreshRegistrationCount() {
     }
 }
 
+async function createAdminUser() {
+    const usernameInput = document.getElementById('admin-username-input');
+    const emailInput = document.getElementById('admin-email-input');
+    const passwordInput = document.getElementById('admin-password-input');
+    const messageDiv = document.getElementById('admin-user-message');
+    
+    const username = usernameInput.value.trim();
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+    
+    // Validation
+    if (!username || username.length < 3) {
+        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Username must be at least 3 characters</span>';
+        return;
+    }
+    
+    if (!password || password.length < 6) {
+        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Password must be at least 6 characters</span>';
+        return;
+    }
+    
+    if (email && !email.includes('@')) {
+        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Please enter a valid email address</span>';
+        return;
+    }
+    
+    try {
+        messageDiv.innerHTML = '<span style="color: #4ecdc4;">Creating admin user...</span>';
+        
+        const response = await fetch('/api/admin/create-admin-user', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                username: username,
+                email: email || null,
+                password: password
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            messageDiv.innerHTML = '<span style="color: #51cf66;">✓ Admin user created successfully!</span>';
+            // Clear form
+            usernameInput.value = '';
+            emailInput.value = '';
+            passwordInput.value = '';
+            // Refresh admin users list
+            loadAdminUsers();
+            setTimeout(() => {
+                messageDiv.innerHTML = '';
+            }, 3000);
+        } else {
+            messageDiv.innerHTML = '<span style="color: #ff6b6b;">Failed to create admin: ' + (data.message || 'Unknown error') + '</span>';
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        messageDiv.innerHTML = '<span style="color: #ff6b6b;">An error occurred. Please try again.</span>';
+    }
+}
+
+async function loadAdminUsers() {
+    try {
+        const response = await fetch('/api/admin/admin-users');
+        const data = await response.json();
+        
+        const container = document.getElementById('admin-users-container');
+        
+        if (data.success && data.admins && data.admins.length > 0) {
+            let html = '<div style="display: grid; gap: 10px;">';
+            data.admins.forEach(admin => {
+                const statusBadge = admin.is_active 
+                    ? '<span style="color: #51cf66; font-size: 12px;">● Active</span>' 
+                    : '<span style="color: #ff6b6b; font-size: 12px;">● Inactive</span>';
+                
+                html += `
+                    <div style="padding: 12px; background: rgba(255,255,255,0.05); border-radius: 5px; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: bold; margin-bottom: 4px;">${admin.username}</div>
+                            <div style="font-size: 12px; color: rgba(255,255,255,0.7);">${admin.email || 'No email'}</div>
+                            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 4px;">Created: ${new Date(admin.created_at).toLocaleDateString()}</div>
+                        </div>
+                        <div>${statusBadge}</div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p style="color: rgba(255,255,255,0.7);">No admin users found</p>';
+        }
+    } catch (error) {
+        console.error('Error loading admin users:', error);
+        const container = document.getElementById('admin-users-container');
+        container.innerHTML = '<p style="color: #ff6b6b;">Error loading admin users</p>';
+    }
+}
+
 // Initialize auto-refresh on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Refresh registration count every 30 seconds
@@ -144,12 +244,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // Also refresh immediately
     refreshRegistrationCount();
     
+    // Load admin users on page load
+    loadAdminUsers();
+    
     // Allow Enter key to update WhatsApp link
     const whatsappInput = document.getElementById('whatsapp-link-input');
     if (whatsappInput) {
         whatsappInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 updateWhatsAppLink();
+            }
+        });
+    }
+    
+    // Allow Enter key to create admin user
+    const passwordInput = document.getElementById('admin-password-input');
+    if (passwordInput) {
+        passwordInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                createAdminUser();
             }
         });
     }
