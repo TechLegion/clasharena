@@ -720,9 +720,18 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
                 "dollar_rate": dollar_rate,
                 "per_kill_value": per_kill_value
             }
-            save_entry_to_sheets(entry_data)
+            
+            logger.info(f"Attempting to save entry to Google Sheets: {entry.payment_reference}")
+            result = save_entry_to_sheets(entry_data)
+            if result:
+                logger.info(f"Successfully saved entry to Google Sheets: {entry.payment_reference}")
+            else:
+                logger.warning(f"Failed to save entry to Google Sheets: {entry.payment_reference}")
+                logger.warning("Check GOOGLE_SHEETS_ENABLED, GOOGLE_SPREADSHEET_ID, and credentials file")
         except Exception as e:
-            logger.warning(f"Failed to save to Google Sheets: {e}")
+            logger.error(f"Error saving to Google Sheets: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         # Get current WhatsApp link from database
         whatsapp_link = get_whatsapp_link(db)

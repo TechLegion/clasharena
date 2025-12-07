@@ -13,6 +13,8 @@ GOOGLE_SHEETS_ENABLED = os.getenv("GOOGLE_SHEETS_ENABLED", "false").lower() == "
 SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID", "")
 SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Entries")
 CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+# Support for base64 encoded credentials in environment variable (for Railway)
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")  # Base64 encoded credentials
 MAX_ENTRIES_PER_SHEET = int(os.getenv("MAX_ENTRIES_PER_SHEET", "100"))  # Create new sheet after this many entries
 
 try:
@@ -30,18 +32,65 @@ try:
         global _sheets_service
         if _sheets_service is None and GOOGLE_SHEETS_ENABLED:
             try:
-                creds_path = os.path.join(os.path.dirname(__file__), CREDENTIALS_FILE)
-                if not os.path.exists(creds_path):
-                    logger.warning(f"Google credentials file not found: {creds_path}")
+                # Try multiple possible paths for credentials file
+                # Check if CREDENTIALS_FILE is already an absolute path
+                if os.path.isabs(CREDENTIALS_FILE) and os.path.exists(CREDENTIALS_FILE):
+                    creds_path = CREDENTIALS_FILE
+                else:
+                    possible_paths = [
+                        CREDENTIALS_FILE,  # Try as-is first (might be absolute or relative)
+                        os.path.join(os.path.dirname(__file__), CREDENTIALS_FILE),  # backend/credentials.json
+                        os.path.join(os.path.dirname(__file__), "..", CREDENTIALS_FILE),  # mvp-fast/credentials.json
+                        os.path.join(os.getcwd(), CREDENTIALS_FILE),  # Current working directory
+                        os.path.join("/app", CREDENTIALS_FILE),  # Railway/Docker path
+                        os.path.join("/app", "backend", CREDENTIALS_FILE),  # Railway backend path
+                        os.path.join("/app", "mvp-fast", CREDENTIALS_FILE),  # Railway mvp-fast path
+                    ]
+                    
+                    creds_path = None
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            creds_path = path
+                            break
+                
+                if not creds_path:
+                    logger.error(f"Google credentials file not found. Tried paths:")
+                    for path in possible_paths if 'possible_paths' in locals() else [CREDENTIALS_FILE]:
+                        logger.error(f"  - {path} (exists: {os.path.exists(path) if not os.path.isabs(path) or os.path.exists(path) else 'N/A'})")
+                    logger.error(f"Current working directory: {os.getcwd()}")
+                    logger.error(f"File directory: {os.path.dirname(__file__)}")
+                    logger.error(f"CREDENTIALS_FILE env var: {CREDENTIALS_FILE}")
                     return None
                 
-                creds = Credentials.from_service_account_file(
-                    creds_path, scopes=SCOPES
-                )
+                # Check if credentials are provided as JSON string (base64 encoded or plain)
+                if GOOGLE_CREDENTIALS_JSON:
+                    import json
+                    import base64
+                    try:
+                        # Try to decode as base64 first, if that fails, use as plain JSON
+                        try:
+                            credentials_json = base64.b64decode(GOOGLE_CREDENTIALS_JSON).decode('utf-8')
+                        except:
+                            credentials_json = GOOGLE_CREDENTIALS_JSON
+                        
+                        creds_dict = json.loads(credentials_json)
+                        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+                        logger.info("Using Google credentials from environment variable")
+                    except Exception as e:
+                        logger.error(f"Failed to parse credentials from GOOGLE_CREDENTIALS_JSON: {e}")
+                        return None
+                else:
+                    logger.info(f"Using credentials file: {creds_path}")
+                    creds = Credentials.from_service_account_file(
+                        creds_path, scopes=SCOPES
+                    )
+                
                 _sheets_service = build('sheets', 'v4', credentials=creds)
-                logger.info("Google Sheets service initialized")
+                logger.info("Google Sheets service initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize Google Sheets service: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return None
         return _sheets_service
     
@@ -241,9 +290,15 @@ try:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not GOOGLE_SHEETS_ENABLED or not SPREADSHEET_ID:
-            logger.debug("Google Sheets integration disabled or not configured")
+        if not GOOGLE_SHEETS_ENABLED:
+            logger.warning("Google Sheets integration is disabled (GOOGLE_SHEETS_ENABLED=false)")
             return False
+        
+        if not SPREADSHEET_ID:
+            logger.error("Google Sheets SPREADSHEET_ID is not configured")
+            return False
+        
+        logger.info(f"Google Sheets enabled. Spreadsheet ID: {SPREADSHEET_ID[:20]}...")
         
         service = get_sheets_service()
         if not service:
