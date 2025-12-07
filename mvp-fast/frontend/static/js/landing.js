@@ -45,18 +45,29 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.success) {
                 // Check if already registered or payment completed
                 if (data.already_registered || data.payment_completed) {
+                    // Hide loading state first
+                    loading.style.display = 'none';
+                    enterBtn.disabled = false;
+                    
                     // Redirect to appropriate page
                     if (data.redirect_url) {
-                        window.location.href = data.redirect_url;
+                        // Small delay to ensure UI updates before redirect
+                        setTimeout(() => {
+                            window.location.href = data.redirect_url;
+                        }, 100);
                     } else {
                         errorMsg.textContent = data.message || 'You have already registered';
                         errorMsg.style.display = 'block';
-                        enterBtn.disabled = false;
-                        loading.style.display = 'none';
                     }
                 } else if (data.checkout_url) {
+                    // Hide loading state before redirecting to payment
+                    loading.style.display = 'none';
+                    enterBtn.disabled = false;
+                    
                     // Redirect to payment gateway
-                    window.location.href = data.checkout_url;
+                    setTimeout(() => {
+                        window.location.href = data.checkout_url;
+                    }, 100);
                 } else {
                     errorMsg.textContent = 'Invalid response from server';
                     errorMsg.style.display = 'block';

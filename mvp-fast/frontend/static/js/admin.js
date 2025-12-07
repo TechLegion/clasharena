@@ -111,7 +111,6 @@ async function refreshRegistrationCount() {
         
         if (data.success) {
             const totalRegistrationsEl = document.getElementById('total-registrations');
-            const remainingTo100El = document.getElementById('remaining-to-100');
             
             if (totalRegistrationsEl) {
                 totalRegistrationsEl.textContent = data.total_registrations;
