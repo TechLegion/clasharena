@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, text
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -440,6 +440,15 @@ async def initiate_payment(
 ):
     """Initiate payment and return checkout URL"""
     try:
+        # Test database connection first
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception as db_error:
+            logger.error(f"Database connection error in payment initiation: {db_error}")
+            raise HTTPException(
+                status_code=503, 
+                detail="Database connection error. Please try again in a moment."
+            )
         # Check if email already has a completed payment
         existing_entry = db.query(Entry).filter(
             Entry.contact_email == email,
