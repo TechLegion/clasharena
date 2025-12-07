@@ -115,7 +115,15 @@ FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
 PAYMENT_GATEWAY = os.getenv("PAYMENT_GATEWAY", "paystack")  # paystack or flutterwave
 ENTRY_FEE_USD = float(os.getenv("ENTRY_FEE_USD", "1.0"))  # $1 USD entry fee
 WHATSAPP_GROUP_LINK = os.getenv("WHATSAPP_GROUP_LINK", "https://chat.whatsapp.com/your-group-link")
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+# For Railway deployment, use RAILWAY_PUBLIC_DOMAIN if BASE_URL is not set
+BASE_URL = os.getenv("BASE_URL")
+if not BASE_URL:
+    railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    if railway_domain:
+        BASE_URL = f"https://{railway_domain}"
+        logger.info(f"Using Railway domain: {BASE_URL}")
+    else:
+        BASE_URL = "http://localhost:8000"
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@clasharena.com")
 # Registration milestone for testing (set to 10 for testing phase, change to 100 for production)
 REGISTRATION_MILESTONE = int(os.getenv("REGISTRATION_MILESTONE", "10"))
@@ -358,6 +366,11 @@ def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict
     """Initiate Paystack payment"""
     import requests
     try:
+        base_url = os.getenv('BASE_URL', 'http://localhost:8000')
+        callback_url = f"{base_url}/intake/{reference}"
+        
+        logger.info(f"Initializing Paystack payment - Callback URL: {callback_url}")
+        
         headers = {
             "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
             "Content-Type": "application/json"
@@ -366,7 +379,7 @@ def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict
             "email": email,
             "amount": int(amount * 100),  # Convert to kobo
             "reference": reference,
-            "callback_url": f"{os.getenv('BASE_URL', 'http://localhost:8000')}/intake/{reference}",
+            "callback_url": callback_url,
             "metadata": {
                 "custom_fields": [
                     {
@@ -380,19 +393,37 @@ def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict
         response = requests.post(
             "https://api.paystack.co/transaction/initialize",
             headers=headers,
-            json=data
+            json=data,
+            timeout=10
         )
+        
+        logger.info(f"Paystack response status: {response.status_code}")
+        
         if response.status_code == 200:
             result = response.json()
+            logger.info(f"Paystack response: {result}")
+            
             if result.get("status"):
+                auth_url = result["data"]["authorization_url"]
+                logger.info(f"Payment URL generated: {auth_url}")
                 return {
                     "success": True,
-                    "authorization_url": result["data"]["authorization_url"],
-                    "access_code": result["data"]["access_code"]
+                    "authorization_url": auth_url,
+                    "access_code": result["data"]["access_code"],
+                    "callback_url": callback_url
                 }
-        return {"success": False, "error": response.text}
+            else:
+                error_msg = result.get("message", "Unknown error")
+                logger.error(f"Paystack error: {error_msg}")
+                return {"success": False, "error": error_msg}
+        else:
+            error_text = response.text
+            logger.error(f"Paystack API error: {response.status_code} - {error_text}")
+            return {"success": False, "error": f"API returned {response.status_code}: {error_text}"}
     except Exception as e:
         logger.error(f"Paystack initiation error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {"success": False, "error": str(e)}
 
 def initiate_flutterwave_payment(amount: float, email: str, reference: str) -> dict:
