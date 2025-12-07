@@ -367,6 +367,8 @@ def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict
     import requests
     try:
         base_url = os.getenv('BASE_URL', 'http://localhost:8000')
+        # Remove trailing slash if present
+        base_url = base_url.rstrip('/')
         callback_url = f"{base_url}/intake/{reference}"
         
         logger.info(f"Initializing Paystack payment - Callback URL: {callback_url}")
@@ -576,8 +578,9 @@ async def intake_page_query(
     if not payment_reference:
         raise HTTPException(status_code=400, detail="Payment reference is required")
     
-    # Redirect to path-based URL for consistency
-    return RedirectResponse(url=f"/intake/{payment_reference}", status_code=302)
+    # Process directly instead of redirecting to avoid double slash issues
+    logger.info(f"Intake page accessed via query params for reference: {payment_reference}")
+    return await intake_page(request, payment_reference, db)
 
 @app.get("/intake/{payment_reference}", response_class=HTMLResponse)
 async def intake_page(
@@ -586,11 +589,17 @@ async def intake_page(
     db: Session = Depends(get_db)
 ):
     """Player intake form page (locked to payment reference)"""
+    logger.info(f"Intake page accessed for reference: {payment_reference}")
     
     # Verify payment first
     entry = db.query(Entry).filter(Entry.payment_reference == payment_reference).first()
     if not entry:
-        raise HTTPException(status_code=404, detail="Payment reference not found")
+        logger.error(f"Entry not found for reference: {payment_reference}")
+        logger.error(f"Available entries: {[e.payment_reference for e in db.query(Entry).limit(10).all()]}")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Payment reference '{payment_reference}' not found. Please contact support if you completed payment."
+        )
     
     if entry.payment_status != "completed":
         # Verify payment
