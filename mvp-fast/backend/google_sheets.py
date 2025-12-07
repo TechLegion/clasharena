@@ -32,6 +32,32 @@ try:
         global _sheets_service
         if _sheets_service is None and GOOGLE_SHEETS_ENABLED:
             try:
+                # PRIORITY 1: Check if credentials are provided as JSON string (environment variable)
+                # This is preferred for Railway/deployment where files might not be accessible
+                if GOOGLE_CREDENTIALS_JSON:
+                    import json
+                    import base64
+                    try:
+                        # Try to decode as base64 first, if that fails, use as plain JSON
+                        try:
+                            credentials_json = base64.b64decode(GOOGLE_CREDENTIALS_JSON).decode('utf-8')
+                            logger.info("Decoded base64 encoded credentials from GOOGLE_CREDENTIALS_JSON")
+                        except:
+                            credentials_json = GOOGLE_CREDENTIALS_JSON
+                            logger.info("Using plain JSON credentials from GOOGLE_CREDENTIALS_JSON")
+                        
+                        creds_dict = json.loads(credentials_json)
+                        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+                        _sheets_service = build('sheets', 'v4', credentials=creds)
+                        logger.info("Google Sheets service initialized successfully from environment variable")
+                        return _sheets_service
+                    except Exception as e:
+                        logger.error(f"Failed to parse credentials from GOOGLE_CREDENTIALS_JSON: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        return None
+                
+                # PRIORITY 2: Try to find credentials file (for local development)
                 # Try multiple possible paths for credentials file
                 # Check if CREDENTIALS_FILE is already an absolute path
                 if os.path.isabs(CREDENTIALS_FILE) and os.path.exists(CREDENTIALS_FILE):
@@ -54,36 +80,20 @@ try:
                             break
                 
                 if not creds_path:
-                    logger.error(f"Google credentials file not found. Tried paths:")
+                    logger.warning(f"Google credentials file not found. Tried paths:")
                     for path in possible_paths if 'possible_paths' in locals() else [CREDENTIALS_FILE]:
-                        logger.error(f"  - {path} (exists: {os.path.exists(path) if not os.path.isabs(path) or os.path.exists(path) else 'N/A'})")
-                    logger.error(f"Current working directory: {os.getcwd()}")
-                    logger.error(f"File directory: {os.path.dirname(__file__)}")
-                    logger.error(f"CREDENTIALS_FILE env var: {CREDENTIALS_FILE}")
+                        exists = os.path.exists(path) if (not os.path.isabs(path) or os.path.exists(path)) else False
+                        logger.warning(f"  - {path} (exists: {exists})")
+                    logger.warning(f"Current working directory: {os.getcwd()}")
+                    logger.warning(f"File directory: {os.path.dirname(__file__)}")
+                    logger.warning(f"CREDENTIALS_FILE env var: {CREDENTIALS_FILE}")
+                    logger.warning("Consider using GOOGLE_CREDENTIALS_JSON environment variable instead")
                     return None
                 
-                # Check if credentials are provided as JSON string (base64 encoded or plain)
-                if GOOGLE_CREDENTIALS_JSON:
-                    import json
-                    import base64
-                    try:
-                        # Try to decode as base64 first, if that fails, use as plain JSON
-                        try:
-                            credentials_json = base64.b64decode(GOOGLE_CREDENTIALS_JSON).decode('utf-8')
-                        except:
-                            credentials_json = GOOGLE_CREDENTIALS_JSON
-                        
-                        creds_dict = json.loads(credentials_json)
-                        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-                        logger.info("Using Google credentials from environment variable")
-                    except Exception as e:
-                        logger.error(f"Failed to parse credentials from GOOGLE_CREDENTIALS_JSON: {e}")
-                        return None
-                else:
-                    logger.info(f"Using credentials file: {creds_path}")
-                    creds = Credentials.from_service_account_file(
-                        creds_path, scopes=SCOPES
-                    )
+                logger.info(f"Using credentials file: {creds_path}")
+                creds = Credentials.from_service_account_file(
+                    creds_path, scopes=SCOPES
+                )
                 
                 _sheets_service = build('sheets', 'v4', credentials=creds)
                 logger.info("Google Sheets service initialized successfully")
