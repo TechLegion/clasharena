@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Form, Request
+from fastapi import FastAPI, HTTPException, Depends, status, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
@@ -532,9 +532,30 @@ async def initiate_payment(
         logger.error(f"Payment initiation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/intake", response_class=HTMLResponse)
+async def intake_page_query(
+    request: Request,
+    db: Session = Depends(get_db),
+    reference: Optional[str] = Query(None, alias="reference"),
+    trxref: Optional[str] = Query(None, alias="trxref")
+):
+    """Player intake form page - handles Paystack redirect with query parameters"""
+    # Handle Paystack redirect with query parameters (reference or trxref)
+    payment_reference = reference or trxref
+    if not payment_reference:
+        raise HTTPException(status_code=400, detail="Payment reference is required")
+    
+    # Redirect to path-based URL for consistency
+    return RedirectResponse(url=f"/intake/{payment_reference}", status_code=302)
+
 @app.get("/intake/{payment_reference}", response_class=HTMLResponse)
-async def intake_page(request: Request, payment_reference: str, db: Session = Depends(get_db)):
+async def intake_page(
+    request: Request, 
+    payment_reference: str, 
+    db: Session = Depends(get_db)
+):
     """Player intake form page (locked to payment reference)"""
+    
     # Verify payment first
     entry = db.query(Entry).filter(Entry.payment_reference == payment_reference).first()
     if not entry:
@@ -559,6 +580,10 @@ async def intake_page(request: Request, payment_reference: str, db: Session = De
             db.commit()
             db.refresh(entry)  # Refresh to get updated status
             logger.info(f"Payment verified and updated for reference: {payment_reference}")
+            
+            # Check if already submitted - redirect immediately after verification
+            if entry.codm_id:
+                return RedirectResponse(url=f"/thank-you/{payment_reference}", status_code=302)
         else:
             logger.warning(f"Payment verification failed for reference: {payment_reference}, reason: {verification.get('error', 'Unknown')}")
             return templates.TemplateResponse("payment_pending.html", {
@@ -567,10 +592,11 @@ async def intake_page(request: Request, payment_reference: str, db: Session = De
                 "error": verification.get("error", "Payment verification failed")
             })
     
-    # Check if already submitted
+    # Check if already submitted (double check after refresh)
     if entry.codm_id:
         return RedirectResponse(url=f"/thank-you/{payment_reference}", status_code=302)
     
+    # Payment verified, show intake form
     return templates.TemplateResponse("intake.html", {
         "request": request,
         "payment_reference": payment_reference
