@@ -3,9 +3,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables from .env file
-load_dotenv()
+# Explicitly load from backend/.env first, fallback to root .env
+backend_dir = Path(__file__).parent.parent  # backend/app -> backend
+backend_env = backend_dir / ".env"
+root_env = backend_dir.parent / ".env"  # backend -> root
+
+# Try backend/.env first, then root/.env
+if backend_env.exists():
+    load_dotenv(backend_env)
+    print(f"✅ Loaded .env from: {backend_env}")
+elif root_env.exists():
+    load_dotenv(root_env)
+    print(f"✅ Loaded .env from: {root_env}")
+else:
+    # Fallback to default behavior
+    load_dotenv()
+    print("⚠️ Using default load_dotenv() behavior")
 
 from app.core.config import settings
 from app.core.database import init_db

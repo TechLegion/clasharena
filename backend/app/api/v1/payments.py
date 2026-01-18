@@ -109,6 +109,13 @@ async def initialize_deposit(
                 detail="Payment service configuration error"
             )
         
+        # Use localhost for development, otherwise use configured FRONTEND_URL
+        # Check if we're in development mode (ENV not set or set to development)
+        is_dev = settings.ENV.lower() in ["development", "dev", ""] or not settings.ENV
+        callback_url = "http://localhost:3000/dashboard" if is_dev else f"{settings.FRONTEND_URL}/dashboard"
+        
+        logger.info(f"Initializing deposit with callback_url: {callback_url} (ENV: {settings.ENV})")
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://api.paystack.co/transaction/initialize",
@@ -120,24 +127,32 @@ async def initialize_deposit(
                     "email": deposit_data.email,
                     "amount": int(deposit_data.amount * 100),  # Convert to kobo
                     "reference": reference,
-                    "callback_url": f"{settings.FRONTEND_URL}/dashboard"
+                    "callback_url": callback_url
                 }
             )
         
         if response.status_code == 200:
             result = response.json()
-            return {
-                "status": "success",
-                "message": "Payment initialized successfully",
-                "authorization_url": result["data"]["authorization_url"],
-                "reference": reference,
-                "access_code": result["data"]["access_code"]
-            }
+            if result.get("status") and result.get("data"):
+                return {
+                    "status": "success",
+                    "message": "Payment initialized successfully",
+                    "authorization_url": result["data"]["authorization_url"],
+                    "reference": reference,
+                    "access_code": result["data"].get("access_code")
+                }
+            else:
+                logger.error(f"Invalid Paystack response structure: {result}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Invalid response from payment service: {result.get('message', 'Unknown error')}"
+                )
         else:
-            logger.error(f"Paystack initialization failed: {response.status_code}")
+            error_body = response.text
+            logger.error(f"Paystack initialization failed: {response.status_code} - {error_body}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Payment initialization failed"
+                detail=f"Payment initialization failed: {error_body}"
             )
     
     except HTTPException:
@@ -265,9 +280,20 @@ async def request_withdrawal(
 ):
     """Request a withdrawal to bank account"""
     try:
-        from shared.models import Wallet
+        from shared.models import Wallet, Transaction
+        import uuid
+        from datetime import datetime
         
-        # Get wallet with lock
+        # Minimum withdrawal amount
+        
+        MIN_WITHDRAWAL = 500
+        if withdrawal_data.amount < MIN_WITHDRAWAL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Minimum withdrawal amount is ₦{MIN_WITHDRAWAL:,.2f}"
+            )
+        
+        # Get wallet with lock to prevent race conditions
         wallet = db.query(Wallet).filter(
             Wallet.user_id == current_user.id
         ).with_for_update().first()
@@ -282,17 +308,92 @@ async def request_withdrawal(
                 detail=f"Insufficient balance. Available: ₦{wallet.balance:,.2f}"
             )
         
-        # TODO: Implement Paystack transfer
-        # For now, return not implemented
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Withdrawal processing not yet implemented"
+        # Step 1: Verify account number matches account name
+        resolve_response = paystack_service.resolve_account_number(
+            account_number=withdrawal_data.account_number,
+            bank_code=withdrawal_data.bank_code
         )
+        
+        if not resolve_response.get('status'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Account verification failed: {resolve_response.get('message', 'Invalid account details')}"
+            )
+        
+        resolved_name = resolve_response['data']['account_name']
+        
+        # Step 2: Create transfer recipient
+        recipient_response = paystack_service.create_transfer_recipient(
+            account_number=withdrawal_data.account_number,
+            bank_code=withdrawal_data.bank_code,
+            account_name=resolved_name,
+            email=current_user.email
+        )
+        
+        if not recipient_response.get('status'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to create transfer recipient: {recipient_response.get('message', 'Unknown error')}"
+            )
+        
+        recipient_code = recipient_response['data']['recipient_code']
+        
+        # Step 3: Generate unique transfer reference
+        transfer_reference = f"WD_{current_user.id}_{uuid.uuid4().hex[:12].upper()}"
+        
+        # Step 4: Initiate the transfer
+        transfer_response = paystack_service.initiate_transfer(
+            amount=withdrawal_data.amount,
+            recipient_code=recipient_code,
+            reference=transfer_reference,
+            reason=f"ClashArena withdrawal for {current_user.username}"
+        )
+        
+        if not transfer_response.get('status'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Transfer failed: {transfer_response.get('message', 'Unknown error')}"
+            )
+        
+        # Step 5: Deduct from wallet balance
+        wallet.balance -= withdrawal_data.amount
+        
+        # Step 6: Create transaction record
+        transaction = Transaction(
+            user_id=current_user.id,
+            type="withdrawal",
+            amount=withdrawal_data.amount,
+            status="pending",  # Will be updated via webhook
+            reference=transfer_reference,
+            gateway="paystack",
+            gateway_response=str(transfer_response),
+            metadata={
+                "account_number": withdrawal_data.account_number[-4:].rjust(10, '*'),  # Mask account number
+                "bank_code": withdrawal_data.bank_code,
+                "account_name": resolved_name,
+                "recipient_code": recipient_code,
+                "transfer_code": transfer_response['data'].get('transfer_code')
+            }
+        )
+        db.add(transaction)
+        db.commit()
+        
+        logger.info(f"Withdrawal initiated: {transfer_reference} for user {current_user.id}, amount: ₦{withdrawal_data.amount:,.2f}")
+        
+        return {
+            "success": True,
+            "message": f"Withdrawal of ₦{withdrawal_data.amount:,.2f} initiated successfully",
+            "reference": transfer_reference,
+            "status": "pending",
+            "account_name": resolved_name,
+            "new_balance": wallet.balance
+        }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Withdrawal request error: {type(e).__name__}", exc_info=True)
+        db.rollback()
+        logger.error(f"Withdrawal request error: {type(e).__name__}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Withdrawal request failed. Please try again."
@@ -591,12 +692,69 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
                     return {"status": "error", "message": "processing_failed"}
         
         elif event_type == 'transfer.success':
-            logger.info("Transfer success webhook received")
-            pass
-        
-        elif event_type == 'transfer.failed':
-            logger.info("Transfer failed webhook received")
-            pass
+            # Handle successful withdrawal transfer
+            transfer_data = webhook_data.get('data', {})
+            reference = transfer_data.get('reference')
+            
+            if reference:
+                from shared.models import Transaction
+                
+                # Find the transaction
+                transaction = db.query(Transaction).filter(
+                    Transaction.reference == reference,
+                    Transaction.type == "withdrawal"
+                ).first()
+                
+                if transaction:
+                    if transaction.status == "completed":
+                        logger.info(f"Transfer {reference} already marked as completed")
+                        return {"status": "success", "message": "already_processed"}
+                    
+                    # Update transaction status to completed
+                    transaction.status = "completed"
+                    transaction.gateway_response = str(transfer_data)
+                    db.commit()
+                    
+                    logger.info(f"✅ Withdrawal transfer completed: {reference}, amount: ₦{transaction.amount:,.2f}")
+                    return {"status": "success", "message": "transfer_completed"}
+                else:
+                    logger.warning(f"No withdrawal transaction found for reference: {reference}")
+            
+        elif event_type == 'transfer.failed' or event_type == 'transfer.reversed':
+            # Handle failed or reversed withdrawal transfer
+            transfer_data = webhook_data.get('data', {})
+            reference = transfer_data.get('reference')
+            reason = transfer_data.get('reason', 'Transfer failed')
+            
+            if reference:
+                from shared.models import Transaction, Wallet
+                
+                # Find the transaction
+                transaction = db.query(Transaction).filter(
+                    Transaction.reference == reference,
+                    Transaction.type == "withdrawal"
+                ).first()
+                
+                if transaction and transaction.status == "pending":
+                    # Update transaction status to failed
+                    transaction.status = "failed"
+                    transaction.gateway_response = str(transfer_data)
+                    
+                    # Refund the amount back to user's wallet
+                    wallet = db.query(Wallet).filter(
+                        Wallet.user_id == transaction.user_id
+                    ).with_for_update().first()
+                    
+                    if wallet:
+                        wallet.balance += transaction.amount
+                        logger.info(f"💰 Refunded ₦{transaction.amount:,.2f} to user {transaction.user_id} wallet")
+                    
+                    db.commit()
+                    
+                    logger.warning(f"❌ Withdrawal transfer failed: {reference}, reason: {reason}")
+                    return {"status": "success", "message": "transfer_failed_refunded"}
+                else:
+                    logger.warning(f"No pending withdrawal found for reference: {reference}")
         
         return {"status": "success"}
         

@@ -68,3 +68,11 @@ class Settings:
     TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
 
 settings = Settings()
+
+# Debug: Print which Paystack keys are loaded (without exposing full keys)
+if settings.PAYSTACK_SECRET_KEY:
+    secret_preview = settings.PAYSTACK_SECRET_KEY[:7] + "..." + settings.PAYSTACK_SECRET_KEY[-4:]
+    key_type = "TEST" if "test" in settings.PAYSTACK_SECRET_KEY.lower() else ("LIVE" if "live" in settings.PAYSTACK_SECRET_KEY.lower() else "UNKNOWN")
+    print(f"🔑 Paystack Secret Key loaded: {secret_preview} ({key_type})")
+else:
+    print("⚠️ WARNING: PAYSTACK_SECRET_KEY is not set!")
