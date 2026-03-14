@@ -3,230 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - ClashArena</title>
+    <title>Dashboard — ClashArena Admin</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/admin.css">
 </head>
-<body style="background: var(--color-black);">
+<body class="admin-page">
     <div class="admin-container">
         <header class="admin-header">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px;">
-                <div style="display: flex; align-items: center; gap: 20px;">
-                    <img src="/static/logo.jpg" alt="ClashArena Logo" style="max-width: 60px; height: auto;">
-                    <h1 style="margin: 0;">ClashArena Admin Dashboard</h1>
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <span style="color: var(--color-gray); font-size: 14px;">Tournament:</span>
-                    <select id="tournament-status-select" onchange="updateTournamentStatus()" style="padding: 8px 12px; border-radius: 5px; background: var(--color-dark-gray); color: var(--color-white); border: 1px solid var(--color-gray);">
-                        <option value="active" {% if stats.tournament_status == 'active' %}selected{% endif %}>Active</option>
-                        <option value="closed" {% if stats.tournament_status == 'closed' %}selected{% endif %}>Closed</option>
-                        <option value="archived" {% if stats.tournament_status == 'archived' %}selected{% endif %}>Archived</option>
-                    </select>
-                    <a href="/api/admin/export-csv" class="btn-primary" style="padding: 10px 20px; text-decoration: none;">Export CSV</a>
-                    <button class="btn-primary" onclick="bulkPayout()" style="padding: 10px 20px;">Bulk Payout</button>
-                </div>
+            <div class="admin-brand">
+                <a href="/" style="display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit;">
+                    <img src="/static/logo.jpg" alt="ClashArena">
+                    <h1>Dashboard</h1>
+                </a>
+            </div>
+            <div class="admin-toolbar">
+                <span class="admin-toolbar-label">Tournament</span>
+                <select id="tournament-status-select" class="admin-select" onchange="updateTournamentStatus()">
+                    <option value="active" {% if stats.tournament_status == 'active' %}selected{% endif %}>Active</option>
+                    <option value="closed" {% if stats.tournament_status == 'closed' %}selected{% endif %}>Closed</option>
+                    <option value="archived" {% if stats.tournament_status == 'archived' %}selected{% endif %}>Archived</option>
+                </select>
+                <a href="/api/admin/export-csv" class="admin-btn admin-btn-secondary">Export CSV</a>
+                <button type="button" class="admin-btn admin-btn-primary" onclick="bulkPayout()">Bulk Payout</button>
             </div>
         </header>
-        
-        <div class="stats-grid">
-            <div class="stat-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                <h3>Total Registrations</h3>
-                <p class="stat-number" id="total-registrations">{{ stats.total_registrations }}</p>
+
+        <div class="admin-stats">
+            <div class="admin-stat admin-stat-featured">
+                <div class="admin-stat-label">Registrations</div>
+                <div class="admin-stat-value" id="total-registrations">{{ stats.total_registrations }}</div>
                 {% if stats.milestone_reached %}
-                <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.2); border-radius: 5px;">
-                    <span style="color: #ffd700; font-weight: bold;">🎉 Milestone: {{ stats.milestone_threshold }} Users Reached!</span>
-                </div>
+                <div class="admin-stat-milestone">Milestone: {{ stats.milestone_threshold }} reached</div>
                 {% else %}
-                <div style="margin-top: 10px; font-size: 0.9em; color: rgba(255,255,255,0.8);">
-                    <span id="remaining-to-milestone">{{ stats.milestone_threshold - stats.total_registrations }}</span> more to reach {{ stats.milestone_threshold }}
-                </div>
+                <div class="admin-stat-progress"><span id="remaining-to-milestone">{{ stats.milestone_threshold - stats.total_registrations }}</span> to {{ stats.milestone_threshold }}</div>
                 {% endif %}
             </div>
-            <div class="stat-card">
-                <h3>Total Entries</h3>
-                <p class="stat-number">{{ stats.total_entries }}</p>
+            <div class="admin-stat">
+                <div class="admin-stat-label">Entries</div>
+                <div class="admin-stat-value">{{ stats.total_entries }}</div>
             </div>
-            <div class="stat-card">
-                <h3>Winners</h3>
-                <p class="stat-number">{{ stats.winners }}</p>
+            <div class="admin-stat">
+                <div class="admin-stat-label">Winners</div>
+                <div class="admin-stat-value">{{ stats.winners }}</div>
             </div>
-            <div class="stat-card">
-                <h3>Pending Payouts</h3>
-                <p class="stat-number">{{ stats.pending_payouts }}</p>
+            <div class="admin-stat">
+                <div class="admin-stat-label">Pending Payouts</div>
+                <div class="admin-stat-value">{{ stats.pending_payouts }}</div>
             </div>
-            <div class="stat-card">
-                <h3>Completed Payouts</h3>
-                <p class="stat-number">{{ stats.completed_payouts }}</p>
+            <div class="admin-stat">
+                <div class="admin-stat-label">Completed</div>
+                <div class="admin-stat-value">{{ stats.completed_payouts }}</div>
             </div>
         </div>
-        
-        <!-- Settings Section -->
-        <div class="settings-section" style="margin: 30px 0; padding: 20px; background: var(--color-dark-gray); border-radius: 10px;">
-            <h2 style="margin-top: 0; color: var(--color-white);">Settings</h2>
-            
-            <!-- WhatsApp Link Management -->
-            <div class="whatsapp-link-section" style="margin-top: 20px;">
-                <h3 style="color: var(--color-white); margin-bottom: 15px;">WhatsApp Group Link</h3>
-                <div style="display: flex; gap: 10px; align-items: flex-start;">
-                    <input 
-                        type="text" 
-                        id="whatsapp-link-input" 
-                        value="{{ stats.whatsapp_link }}" 
-                        placeholder="https://chat.whatsapp.com/your-group-link"
-                        style="flex: 1; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
-                    />
-                    <button 
-                        class="btn-primary" 
-                        onclick="updateWhatsAppLink()"
-                        style="padding: 12px 24px; white-space: nowrap;"
-                    >
-                        Update Link
-                    </button>
-                </div>
-                <div id="whatsapp-link-message" style="margin-top: 10px; font-size: 14px;"></div>
-            </div>
-            
-            <!-- COD Lobby Link -->
-            <div class="cod-lobby-section" style="margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--color-gray);">
-                <h3 style="color: var(--color-white); margin-bottom: 15px;">COD Lobby Link</h3>
-                <p style="color: rgba(255,255,255,0.7); font-size: 13px; margin-bottom: 10px;">Share this link with players to join the match lobby</p>
-                <div style="display: flex; gap: 10px; align-items: flex-start;">
-                    <input 
-                        type="text" 
-                        id="cod-lobby-link-input" 
-                        value="{{ stats.cod_lobby_link }}" 
-                        placeholder="https:// or COD lobby invite link"
-                        style="flex: 1; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
-                    />
-                    <button class="btn-primary" onclick="updateCodLobbyLink()" style="padding: 12px 24px; white-space: nowrap;">Update Link</button>
-                </div>
-                <div id="cod-lobby-message" style="margin-top: 10px; font-size: 14px;"></div>
-            </div>
-            
-            <!-- Lobby Cross-Check -->
-            <div class="lobby-cross-check-section" style="margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--color-gray);">
-                <h3 style="color: var(--color-white); margin-bottom: 15px;">Lobby Cross-Check</h3>
-                <p style="color: rgba(255,255,255,0.7); font-size: 13px; margin-bottom: 10px;">Paste CODM IDs from the lobby (one per line) to compare with registered players</p>
-                <textarea id="lobby-ids-input" rows="4" placeholder="Player1&#10;Player2&#10;Player3" style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px; font-family: monospace;"></textarea>
-                <button class="btn-primary" onclick="lobbyCrossCheck()" style="margin-top: 10px; padding: 12px 24px;">Check Lobby</button>
-                <div id="lobby-check-result" style="margin-top: 15px; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 5px; display: none;"></div>
-            </div>
-            
-            <!-- Admin User Management -->
-            <div class="admin-users-section" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--color-gray);">
-                <h3 style="color: var(--color-white); margin-bottom: 15px;">Create New Admin User</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
-                    <div>
-                        <label style="display: block; color: var(--color-white); margin-bottom: 5px; font-size: 14px;">Username</label>
-                        <input 
-                            type="text" 
-                            id="admin-username-input" 
-                            placeholder="Enter username (min 3 characters)"
-                            style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
-                        />
+
+        <div class="admin-section">
+            <div class="admin-section-header">Settings</div>
+            <div class="admin-section-body">
+                <div class="admin-field">
+                    <label class="admin-field-label">WhatsApp Group Link</label>
+                    <div class="admin-field-row">
+                        <input type="text" id="whatsapp-link-input" class="admin-input" value="{{ stats.whatsapp_link }}" placeholder="https://chat.whatsapp.com/...">
+                        <button type="button" class="admin-btn admin-btn-primary" onclick="updateWhatsAppLink()">Update</button>
                     </div>
-                    <div>
-                        <label style="display: block; color: var(--color-white); margin-bottom: 5px; font-size: 14px;">Email (Optional)</label>
-                        <input 
-                            type="email" 
-                            id="admin-email-input" 
-                            placeholder="admin@example.com"
-                            style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
-                        />
+                    <div id="whatsapp-link-message" class="admin-msg"></div>
+                </div>
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
+                    <label class="admin-field-label">COD Lobby Link</label>
+                    <p class="admin-field-hint">Share with players to join the match lobby</p>
+                    <div class="admin-field-row">
+                        <input type="text" id="cod-lobby-link-input" class="admin-input" value="{{ stats.cod_lobby_link }}" placeholder="Lobby invite link">
+                        <button type="button" class="admin-btn admin-btn-primary" onclick="updateCodLobbyLink()">Update</button>
                     </div>
+                    <div id="cod-lobby-message" class="admin-msg"></div>
                 </div>
-                <div style="margin-bottom: 15px;">
-                    <label style="display: block; color: var(--color-white); margin-bottom: 5px; font-size: 14px;">Password</label>
-                    <input 
-                        type="password" 
-                        id="admin-password-input" 
-                        placeholder="Enter password (min 6 characters)"
-                        style="width: 100%; padding: 12px; border: 1px solid var(--color-gray); border-radius: 5px; background: var(--color-black); color: var(--color-white); font-size: 14px;"
-                    />
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
+                    <label class="admin-field-label">Lobby Cross-Check</label>
+                    <p class="admin-field-hint">Paste CODM IDs from the lobby, one per line</p>
+                    <textarea id="lobby-ids-input" class="admin-input admin-textarea" rows="4" placeholder="Player1&#10;Player2&#10;Player3"></textarea>
+                    <button type="button" class="admin-btn admin-btn-primary" onclick="lobbyCrossCheck()" style="margin-top: 12px;">Check Lobby</button>
+                    <div id="lobby-check-result" class="admin-lobby-result" style="display: none;"></div>
                 </div>
-                <button 
-                    class="btn-primary" 
-                    onclick="createAdminUser()"
-                    style="padding: 12px 24px;"
-                >
-                    Create Admin User
-                </button>
-                <div id="admin-user-message" style="margin-top: 10px; font-size: 14px;"></div>
-            </div>
-            
-            <!-- Existing Admin Users List -->
-            <div class="admin-users-list" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--color-gray);">
-                <h3 style="color: var(--color-white); margin-bottom: 15px;">Existing Admin Users</h3>
-                <div id="admin-users-container" style="color: var(--color-white);">
-                    <p style="color: rgba(255,255,255,0.7);">Loading admin users...</p>
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
+                    <label class="admin-field-label">Create Admin User</label>
+                    <div class="admin-field-grid" style="margin-bottom: 16px;">
+                        <div class="admin-field">
+                            <label class="admin-field-label">Username</label>
+                            <input type="text" id="admin-username-input" class="admin-input" placeholder="Min 3 characters">
+                        </div>
+                        <div class="admin-field">
+                            <label class="admin-field-label">Email (optional)</label>
+                            <input type="email" id="admin-email-input" class="admin-input" placeholder="admin@example.com">
+                        </div>
+                    </div>
+                    <div class="admin-field" style="margin-bottom: 16px;">
+                        <label class="admin-field-label">Password</label>
+                        <input type="password" id="admin-password-input" class="admin-input" placeholder="Min 6 characters">
+                    </div>
+                    <button type="button" class="admin-btn admin-btn-primary" onclick="createAdminUser()">Create Admin</button>
+                    <div id="admin-user-message" class="admin-msg"></div>
+                </div>
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
+                    <label class="admin-field-label">Admin Users</label>
+                    <div id="admin-users-container" style="color: var(--admin-text-muted);">Loading...</div>
                 </div>
             </div>
         </div>
-        
-        <div class="entries-section">
-            <h2>All Entries</h2>
-            <div class="entries-table-container">
-                <table class="entries-table">
+
+        <div class="admin-section">
+            <div class="admin-section-header">Entries</div>
+            <div class="admin-table-wrap">
+                <table class="admin-table">
                     <thead>
                         <tr>
-                            <th>Payment Ref</th>
+                            <th>Ref</th>
                             <th>CODM ID</th>
                             <th>Kills</th>
                             <th>Contact</th>
-                            <th>Bank Details</th>
+                            <th>Bank</th>
                             <th>Winner</th>
-                            <th>Payout Status</th>
+                            <th>Payout</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for entry in entries %}
-                        <tr {% if entry.excluded %}style="opacity: 0.6; background: rgba(255,0,0,0.1);"{% endif %}>
-                            <td>{{ entry.payment_reference }}</td>
-                            <td>{{ entry.codm_id or "N/A" }}</td>
+                        <tr {% if entry.excluded %}class="admin-row-excluded"{% endif %}>
+                            <td class="admin-cell-mono">{{ entry.payment_reference }}</td>
+                            <td>{{ entry.codm_id or "—" }}</td>
                             <td>
-                                <input type="number" min="0" value="{{ entry.kill_count or 0 }}" 
-                                    onchange="updateKillCount('{{ entry.id }}', this.value)" 
-                                    style="width: 60px; padding: 6px; text-align: center; background: var(--color-black); color: var(--color-white); border: 1px solid var(--color-gray); border-radius: 4px;">
+                                <input type="number" min="0" value="{{ entry.kill_count or 0 }}" class="admin-input admin-kill-input" onchange="updateKillCount('{{ entry.id }}', this.value)">
                             </td>
                             <td>
                                 <div>{{ entry.contact_phone }}</div>
-                                <div class="small-text">{{ entry.contact_email }}</div>
+                                <div style="font-size: 12px; color: var(--admin-text-muted);">{{ entry.contact_email }}</div>
                             </td>
                             <td>
                                 <div>{{ entry.bank_name }}</div>
-                                <div class="small-text">{{ entry.account_number }} - {{ entry.account_name }}</div>
+                                <div style="font-size: 12px; color: var(--admin-text-muted);">{{ entry.account_number }} · {{ entry.account_name }}</div>
                             </td>
                             <td>
-                                <span class="badge {% if entry.is_winner %}badge-success{% else %}badge-default{% endif %}">
-                                    {% if entry.is_winner %}Winner{% else %}No{% endif %}
+                                <span class="admin-badge {% if entry.is_winner %}admin-badge-success{% else %}admin-badge-default{% endif %}">
+                                    {% if entry.is_winner %}Yes{% else %}No{% endif %}
                                 </span>
                             </td>
                             <td>
-                                <span class="badge badge-{{ entry.payout_status }}">
+                                <span class="admin-badge admin-badge-{{ entry.payout_status }}">
                                     {{ entry.payout_status }}
                                 </span>
                             </td>
                             <td>
-                                <div class="action-buttons">
+                                <div class="admin-actions">
                                     {% if not entry.is_winner %}
-                                    <button class="btn-small btn-success" onclick="markWinner('{{ entry.id }}', true)">
-                                        Mark Winner
-                                    </button>
+                                    <button type="button" class="admin-btn admin-btn-sm admin-btn-success" onclick="markWinner('{{ entry.id }}', true)">Mark Winner</button>
                                     {% else %}
-                                    <button class="btn-small btn-warning" onclick="markWinner('{{ entry.id }}', false)">
-                                        Unmark Winner
-                                    </button>
+                                    <button type="button" class="admin-btn admin-btn-sm admin-btn-secondary" onclick="markWinner('{{ entry.id }}', false)">Unmark</button>
                                     {% endif %}
-                                    
                                     {% if entry.payout_status == 'pending' %}
-                                    <button class="btn-small btn-primary" onclick="triggerPayout('{{ entry.id }}')">
-                                        Trigger Payout
-                                    </button>
+                                    <button type="button" class="admin-btn admin-btn-sm admin-btn-primary" onclick="triggerPayout('{{ entry.id }}')">Payout</button>
                                     {% endif %}
                                     {% if entry.excluded %}
-                                    <button class="btn-small btn-success" onclick="restorePlayer('{{ entry.id }}')">Restore</button>
+                                    <button type="button" class="admin-btn admin-btn-sm admin-btn-success" onclick="restorePlayer('{{ entry.id }}')">Restore</button>
                                     {% else %}
-                                    <button class="btn-small" style="background: #c92a2a; color: white;" onclick="removePlayer('{{ entry.id }}')">Remove</button>
+                                    <button type="button" class="admin-btn admin-btn-sm admin-btn-danger" onclick="removePlayer('{{ entry.id }}')">Remove</button>
                                     {% endif %}
                                 </div>
                             </td>
@@ -240,4 +190,3 @@
     <script src="/static/js/admin.js"></script>
 </body>
 </html>
-

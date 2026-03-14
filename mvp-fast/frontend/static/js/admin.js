@@ -104,7 +104,7 @@ async function updateCodLobbyLink() {
     const messageDiv = document.getElementById('cod-lobby-message');
     const link = input.value.trim();
     try {
-        messageDiv.innerHTML = '<span style="color: #4ecdc4;">Updating...</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-success">Updating...</span>';
         const response = await fetch('/api/admin/update-cod-lobby-link', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -112,13 +112,13 @@ async function updateCodLobbyLink() {
         });
         const data = await response.json();
         if (data.success) {
-            messageDiv.innerHTML = '<span style="color: #51cf66;">✓ COD lobby link updated!</span>';
+            messageDiv.innerHTML = '<span class="admin-msg-success">✓ COD lobby link updated</span>';
             setTimeout(() => { messageDiv.innerHTML = ''; }, 3000);
         } else {
-            messageDiv.innerHTML = '<span style="color: #ff6b6b;">Failed: ' + (data.detail || 'Unknown error') + '</span>';
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || 'Unknown error') + '</span>';
         }
     } catch (error) {
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">An error occurred.</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">An error occurred.</span>';
     }
 }
 
@@ -172,12 +172,12 @@ async function lobbyCrossCheck() {
     const resultDiv = document.getElementById('lobby-check-result');
     const ids = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
     if (ids.length === 0) {
-        resultDiv.innerHTML = '<span style="color: #ff6b6b;">Enter at least one CODM ID</span>';
+        resultDiv.innerHTML = '<span class="admin-msg-error">Enter at least one CODM ID</span>';
         resultDiv.style.display = 'block';
         return;
     }
     try {
-        resultDiv.innerHTML = '<span style="color: #4ecdc4;">Checking...</span>';
+        resultDiv.innerHTML = '<span class="admin-msg-success">Checking...</span>';
         resultDiv.style.display = 'block';
         const response = await fetch('/api/admin/lobby-cross-check', {
             method: 'POST',
@@ -186,17 +186,15 @@ async function lobbyCrossCheck() {
         });
         const data = await response.json();
         if (data.success) {
-            let html = '<div style="color: var(--color-white);">';
-            html += '<p><strong>✓ Matches (' + data.match_count + '):</strong> ' + (data.matches.length ? data.matches.join(', ') : 'None') + '</p>';
-            html += '<p><strong style="color: #ff6b6b;">In lobby but NOT registered (' + data.in_lobby_not_registered.length + '):</strong> ' + (data.in_lobby_not_registered.length ? data.in_lobby_not_registered.join(', ') : 'None') + '</p>';
-            html += '<p><strong style="color: #ffd93d;">Registered but NOT in lobby (' + data.in_sheets_not_in_lobby.length + '):</strong> ' + (data.in_sheets_not_in_lobby.length ? data.in_sheets_not_in_lobby.join(', ') : 'None') + '</p>';
-            html += '</div>';
+            let html = '<p><strong>✓ Matches (' + data.match_count + '):</strong> ' + (data.matches.length ? data.matches.join(', ') : 'None') + '</p>';
+            html += '<p><strong style="color: var(--admin-danger);">In lobby, not registered (' + data.in_lobby_not_registered.length + '):</strong> ' + (data.in_lobby_not_registered.length ? data.in_lobby_not_registered.join(', ') : 'None') + '</p>';
+            html += '<p><strong style="color: var(--admin-accent);">Registered, not in lobby (' + data.in_sheets_not_in_lobby.length + '):</strong> ' + (data.in_sheets_not_in_lobby.length ? data.in_sheets_not_in_lobby.join(', ') : 'None') + '</p>';
             resultDiv.innerHTML = html;
         } else {
-            resultDiv.innerHTML = '<span style="color: #ff6b6b;">Check failed</span>';
+            resultDiv.innerHTML = '<span class="admin-msg-error">Check failed</span>';
         }
     } catch (error) {
-        resultDiv.innerHTML = '<span style="color: #ff6b6b;">Error: ' + error.message + '</span>';
+        resultDiv.innerHTML = '<span class="admin-msg-error">Error: ' + error.message + '</span>';
     }
 }
 
@@ -206,17 +204,17 @@ async function updateWhatsAppLink() {
     const link = input.value.trim();
     
     if (!link) {
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Please enter a WhatsApp link</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">Please enter a WhatsApp link</span>';
         return;
     }
     
     if (!link.startsWith('http://') && !link.startsWith('https://')) {
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Please enter a valid URL starting with http:// or https://</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">Please enter a valid URL starting with http:// or https://</span>';
         return;
     }
     
     try {
-        messageDiv.innerHTML = '<span style="color: #4ecdc4;">Updating...</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-success">Updating...</span>';
         
         const response = await fetch('/api/admin/update-whatsapp-link', {
             method: 'POST',
@@ -231,12 +229,12 @@ async function updateWhatsAppLink() {
         const data = await response.json();
         
         if (data.success) {
-            messageDiv.innerHTML = '<span style="color: #51cf66;">✓ WhatsApp link updated successfully!</span>';
+            messageDiv.innerHTML = '<span class="admin-msg-success">✓ WhatsApp link updated</span>';
             setTimeout(() => {
                 messageDiv.innerHTML = '';
             }, 3000);
         } else {
-            messageDiv.innerHTML = '<span style="color: #ff6b6b;">Failed to update: ' + (data.message || 'Unknown error') + '</span>';
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.message || 'Unknown error') + '</span>';
         }
     } catch (error) {
         console.error('Error:', error);
@@ -289,22 +287,22 @@ async function createAdminUser() {
     
     // Validation
     if (!username || username.length < 3) {
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Username must be at least 3 characters</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">Username must be at least 3 characters</span>';
         return;
     }
     
     if (!password || password.length < 6) {
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Password must be at least 6 characters</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">Password must be at least 6 characters</span>';
         return;
     }
     
     if (email && !email.includes('@')) {
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">Please enter a valid email address</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">Please enter a valid email address</span>';
         return;
     }
     
     try {
-        messageDiv.innerHTML = '<span style="color: #4ecdc4;">Creating admin user...</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-success">Creating...</span>';
         
         const response = await fetch('/api/admin/create-admin-user', {
             method: 'POST',
@@ -321,7 +319,7 @@ async function createAdminUser() {
         const data = await response.json();
         
         if (data.success) {
-            messageDiv.innerHTML = '<span style="color: #51cf66;">✓ Admin user created successfully!</span>';
+            messageDiv.innerHTML = '<span class="admin-msg-success">✓ Admin user created</span>';
             // Clear form
             usernameInput.value = '';
             emailInput.value = '';
@@ -332,11 +330,11 @@ async function createAdminUser() {
                 messageDiv.innerHTML = '';
             }, 3000);
         } else {
-            messageDiv.innerHTML = '<span style="color: #ff6b6b;">Failed to create admin: ' + (data.message || 'Unknown error') + '</span>';
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.message || 'Unknown error') + '</span>';
         }
     } catch (error) {
         console.error('Error:', error);
-        messageDiv.innerHTML = '<span style="color: #ff6b6b;">An error occurred. Please try again.</span>';
+        messageDiv.innerHTML = '<span class="admin-msg-error">An error occurred. Please try again.</span>';
     }
 }
 
@@ -348,32 +346,24 @@ async function loadAdminUsers() {
         const container = document.getElementById('admin-users-container');
         
         if (data.success && data.admins && data.admins.length > 0) {
-            let html = '<div style="display: grid; gap: 10px;">';
+            let html = '';
             data.admins.forEach(admin => {
                 const statusBadge = admin.is_active 
-                    ? '<span style="color: #51cf66; font-size: 12px;">● Active</span>' 
-                    : '<span style="color: #ff6b6b; font-size: 12px;">● Inactive</span>';
-                
-                html += `
-                    <div style="padding: 12px; background: rgba(255,255,255,0.05); border-radius: 5px; display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-weight: bold; margin-bottom: 4px;">${admin.username}</div>
-                            <div style="font-size: 12px; color: rgba(255,255,255,0.7);">${admin.email || 'No email'}</div>
-                            <div style="font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 4px;">Created: ${new Date(admin.created_at).toLocaleDateString()}</div>
-                        </div>
-                        <div>${statusBadge}</div>
-                    </div>
-                `;
+                    ? '<span class="admin-user-status">● Active</span>'
+                    : '<span style="color: var(--admin-danger); font-size: 12px;">● Inactive</span>';
+                html += `<div class="admin-user-card">
+                    <div class="admin-user-info"><strong>${admin.username}</strong><span>${admin.email || 'No email'}</span><span style="display:block;margin-top:4px;font-size:11px;">${new Date(admin.created_at).toLocaleDateString()}</span></div>
+                    <div>${statusBadge}</div>
+                </div>`;
             });
-            html += '</div>';
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<p style="color: rgba(255,255,255,0.7);">No admin users found</p>';
+            container.innerHTML = '<p style="color: var(--admin-text-muted);">No admin users</p>';
         }
     } catch (error) {
         console.error('Error loading admin users:', error);
         const container = document.getElementById('admin-users-container');
-        container.innerHTML = '<p style="color: #ff6b6b;">Error loading admin users</p>';
+        container.innerHTML = '<p class="admin-msg-error">Error loading admin users</p>';
     }
 }
 
