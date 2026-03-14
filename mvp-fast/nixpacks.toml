@@ -8,6 +8,6 @@ cmds = [
 ]
 
 [start]
-# Use 2 workers to reduce DB connections (Railway connection limits)
-cmd = "cd backend && source /opt/venv/bin/activate && gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT --timeout 120"
+# Use 1 worker for Railway (NullPool = fresh conn/request; 1 worker minimizes connection load)
+cmd = "cd backend && source /opt/venv/bin/activate && gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT --timeout 120"
 

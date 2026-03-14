@@ -86,6 +86,20 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 try:
     init_db()
     logger.info("Database initialized successfully")
+    # Run migrations for new columns (kill_count, excluded) on existing databases
+    try:
+        from database.db import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS kill_count INTEGER DEFAULT 0"))
+            conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS excluded BOOLEAN DEFAULT FALSE"))
+            conn.commit()
+        logger.info("Database migrations applied (kill_count, excluded)")
+    except Exception as mig_e:
+        if "already exists" in str(mig_e).lower():
+            pass  # Columns exist, skip
+        else:
+            logger.warning(f"Migration skipped (tables may not exist yet): {mig_e}")
 except Exception as e:
     logger.error(f"Database initialization error: {e}")
     logger.error("Make sure PostgreSQL is running and the database exists.")

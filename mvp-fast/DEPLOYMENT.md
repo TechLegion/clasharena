@@ -85,9 +85,9 @@ mvp-fast/
 6. Deploy!
 
 **Railway Database Connection (if you see "server closed the connection unexpectedly"):**
-- Use `DATABASE_PRIVATE_URL` when app and Postgres are in the same project (more stable)
-- In Railway: Variables → Reference `${{Postgres.DATABASE_PRIVATE_URL}}` or add `DATABASE_PRIVATE_URL` from your Postgres service
-- The app prefers `DATABASE_PRIVATE_URL` over `DATABASE_URL` for internal connections
+1. Use `DATABASE_PRIVATE_URL` – Reference `${{Postgres.DATABASE_PRIVATE_URL}}` in Variables (internal network, more stable)
+2. Try `DATABASE_SSL_MODE=disable` – Add this env var; some Railway app+DB same-project setups need SSL disabled
+3. The app uses NullPool (fresh connection per request) and 1 worker to minimize connection issues
 
 **Cost:** Free tier → $5/month for production
 
