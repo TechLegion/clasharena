@@ -8,5 +8,6 @@ cmds = [
 ]
 
 [start]
-cmd = "cd backend && source /opt/venv/bin/activate && gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT"
+# Use 2 workers to reduce DB connections (Railway connection limits)
+cmd = "cd backend && source /opt/venv/bin/activate && gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT --timeout 120"
 
