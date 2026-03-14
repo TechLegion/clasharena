@@ -303,6 +303,59 @@ def set_whatsapp_link(db: Session, link: str, admin_id: str = None):
     db.commit()
     logger.info(f"WhatsApp link updated to: {link}")
 
+def get_cod_lobby_link(db: Session) -> str:
+    """Get COD lobby link from database"""
+    setting = db.query(AppSettings).filter(AppSettings.key == "cod_lobby_link").first()
+    if setting:
+        return setting.value
+    return ""
+
+def set_cod_lobby_link(db: Session, link: str, admin_id: str = None):
+    """Set COD lobby link in database"""
+    setting = db.query(AppSettings).filter(AppSettings.key == "cod_lobby_link").first()
+    if setting:
+        setting.value = link
+        setting.updated_by = admin_id
+        setting.updated_at = datetime.utcnow()
+    else:
+        setting = AppSettings(
+            key="cod_lobby_link",
+            value=link,
+            description="COD Mobile lobby link for tournament match",
+            updated_by=admin_id
+        )
+        db.add(setting)
+    db.commit()
+    logger.info(f"COD lobby link updated")
+
+def get_tournament_status(db: Session) -> str:
+    """Get tournament status: active, closed, archived"""
+    setting = db.query(AppSettings).filter(AppSettings.key == "tournament_status").first()
+    if setting:
+        return setting.value
+    return "active"
+
+def set_tournament_status(db: Session, status: str, admin_id: str = None):
+    """Set tournament status"""
+    valid = ("active", "closed", "archived")
+    if status not in valid:
+        raise ValueError(f"Status must be one of {valid}")
+    setting = db.query(AppSettings).filter(AppSettings.key == "tournament_status").first()
+    if setting:
+        setting.value = status
+        setting.updated_by = admin_id
+        setting.updated_at = datetime.utcnow()
+    else:
+        setting = AppSettings(
+            key="tournament_status",
+            value=status,
+            description="Tournament status: active, closed, archived",
+            updated_by=admin_id
+        )
+        db.add(setting)
+    db.commit()
+    logger.info(f"Tournament status updated to: {status}")
+
 def check_registration_milestone(db: Session):
     """Check if registration milestone has been reached and notify admin"""
     try:
@@ -829,14 +882,17 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     """Admin dashboard"""
     entries = db.query(Entry).filter(Entry.payment_status == "completed").order_by(Entry.created_at.desc()).all()
     
-    # Count total registrations (entries with payment completed and codm_id filled)
+    # Count total registrations (exclude removed players)
     total_registrations = db.query(Entry).filter(
         Entry.payment_status == "completed",
-        Entry.codm_id.isnot(None)
+        Entry.codm_id.isnot(None),
+        Entry.excluded == False
     ).count()
     
-    # Get WhatsApp link from database
+    # Get WhatsApp link and COD lobby link from database
     whatsapp_link = get_whatsapp_link(db)
+    cod_lobby_link = get_cod_lobby_link(db)
+    tournament_status = get_tournament_status(db)
     
     # Check if milestone reached
     milestone = db.query(RegistrationMilestone).filter(
@@ -848,9 +904,11 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
         "total_entries": len(entries),
         "total_registrations": total_registrations,
         "winners": len([e for e in entries if e.is_winner]),
-        "pending_payouts": len([e for e in entries if e.is_winner and e.payout_status == "pending"]),
+        "pending_payouts": len([e for e in entries if e.payout_status == "pending" and not (e.excluded or False)]),
         "completed_payouts": len([e for e in entries if e.payout_status == "completed"]),
         "whatsapp_link": whatsapp_link,
+        "cod_lobby_link": cod_lobby_link,
+        "tournament_status": tournament_status,
         "milestone_threshold": REGISTRATION_MILESTONE,
         "milestone_reached": milestone is not None
     }
@@ -877,21 +935,24 @@ async def mark_winner(data: MarkWinnerRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/admin/trigger-payout")
 async def trigger_payout(data: TriggerPayoutRequest, db: Session = Depends(get_db)):
-    """Trigger payout for winner"""
+    """Trigger payout for entry. Amount = kill_count * per_kill_value * dollar_rate"""
     entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     
-    if not entry.is_winner:
-        raise HTTPException(status_code=400, detail="Entry is not marked as winner")
-    
     if entry.payout_status == "completed":
         raise HTTPException(status_code=400, detail="Payout already completed")
+    
+    per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+    dollar_rate = get_live_dollar_rate()
+    amount = (entry.kill_count or 0) * per_kill_value * dollar_rate
+    if amount <= 0:
+        amount = float(entry.entry_fee or 0)  # Fallback: entry fee only
     
     # Create payout record
     payout = Payout(
         entry_id=entry.id,
-        amount=entry.entry_fee * 10,  # Example: 10x payout (adjust as needed)
+        amount=amount,
         currency="NGN",
         status="processing",
         gateway="bank_transfer"
@@ -951,6 +1012,7 @@ async def get_entries(
                 "id": e.id,
                 "payment_reference": e.payment_reference,
                 "codm_id": e.codm_id,
+                "kill_count": e.kill_count or 0,
                 "contact_phone": e.contact_phone,
                 "contact_email": e.contact_email,
                 "region": e.region,
@@ -973,7 +1035,7 @@ async def get_exchange_rate_info():
         
         # Get cached rate info
         cache_info = get_cached_rate_info()
-        
+		
         # Get current live rate (this will use cache if available)
         current_rate = get_live_dollar_rate()
         
@@ -1078,6 +1140,22 @@ class CreateAdminUserRequest(BaseModel):
     email: Optional[EmailStr] = None
     password: str = Field(..., min_length=6, description="Admin password")
 
+class UpdateCodLobbyLinkRequest(BaseModel):
+    cod_lobby_link: str = Field(..., description="COD lobby link")
+
+class UpdateTournamentStatusRequest(BaseModel):
+    status: str = Field(..., description="active, closed, or archived")
+
+class UpdateKillCountRequest(BaseModel):
+    entry_id: str
+    kill_count: int = Field(..., ge=0, description="Kill count")
+
+class LobbyCrossCheckRequest(BaseModel):
+    lobby_player_ids: List[str] = Field(..., description="List of CODM IDs from lobby")
+
+class RemovePlayerRequest(BaseModel):
+    entry_id: str
+
 @app.get("/api/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db)):
     """Get admin statistics including registration count"""
@@ -1100,8 +1178,10 @@ async def get_admin_stats(db: Session = Depends(get_db)):
             Entry.payout_status == "pending"
         ).count()
         
-        # Get WhatsApp link
+        # Get WhatsApp link, COD lobby link, tournament status
         whatsapp_link = get_whatsapp_link(db)
+        cod_lobby_link = get_cod_lobby_link(db)
+        tournament_status = get_tournament_status(db)
         
         # Check if milestone reached
         milestone = db.query(RegistrationMilestone).filter(
@@ -1117,6 +1197,8 @@ async def get_admin_stats(db: Session = Depends(get_db)):
                 "winners": winners,
                 "pending_payouts": pending_payouts,
                 "whatsapp_link": whatsapp_link,
+                "cod_lobby_link": cod_lobby_link,
+                "tournament_status": tournament_status,
                 "milestone_threshold": REGISTRATION_MILESTONE,
                 "milestone_reached": milestone is not None,
                 "milestone_notified_at": milestone.notification_sent_at.isoformat() if milestone else None
@@ -1136,18 +1218,10 @@ async def update_whatsapp_link(
 ):
     """Update WhatsApp group link (Admin only)"""
     try:
-        # In production, add proper admin authentication here
-        # For now, we'll allow any authenticated admin
-        
-        # Validate WhatsApp link format
         if not data.whatsapp_link.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="WhatsApp link must be a valid URL")
-        
-        # Update WhatsApp link
         set_whatsapp_link(db, data.whatsapp_link)
-        
         logger.info(f"WhatsApp link updated to: {data.whatsapp_link}")
-        
         return {
             "success": True,
             "message": "WhatsApp link updated successfully",
@@ -1157,6 +1231,211 @@ async def update_whatsapp_link(
         raise
     except Exception as e:
         logger.error(f"Error updating WhatsApp link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/update-cod-lobby-link")
+async def update_cod_lobby_link(
+    data: UpdateCodLobbyLinkRequest,
+    db: Session = Depends(get_db)
+):
+    """Update COD lobby link (Admin only)"""
+    try:
+        set_cod_lobby_link(db, data.cod_lobby_link)
+        return {"success": True, "message": "COD lobby link updated", "cod_lobby_link": data.cod_lobby_link}
+    except Exception as e:
+        logger.error(f"Error updating COD lobby link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/update-tournament-status")
+async def update_tournament_status(
+    data: UpdateTournamentStatusRequest,
+    db: Session = Depends(get_db)
+):
+    """Update tournament status: active, closed, archived"""
+    try:
+        set_tournament_status(db, data.status)
+        return {"success": True, "message": f"Tournament status set to {data.status}", "status": data.status}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating tournament status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/update-kill-count")
+async def update_kill_count(
+    data: UpdateKillCountRequest,
+    db: Session = Depends(get_db)
+):
+    """Update kill count for an entry and sync to Google Sheets"""
+    try:
+        entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        entry.kill_count = data.kill_count
+        db.commit()
+        db.refresh(entry)
+        # Sync to Google Sheets
+        try:
+            update_entry_in_sheets(entry.payment_reference, {
+                "codm_id": entry.codm_id,
+                "contact_email": entry.contact_email,
+                "kill": data.kill_count
+            })
+        except Exception as e:
+            logger.warning(f"Failed to sync kill count to Google Sheets: {e}")
+        return {"success": True, "message": "Kill count updated", "entry_id": entry.id, "kill_count": data.kill_count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating kill count: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/lobby-cross-check")
+async def lobby_cross_check(
+    data: LobbyCrossCheckRequest,
+    db: Session = Depends(get_db)
+):
+    """Compare lobby player IDs against registered entries. Returns matches, in_lobby_not_registered, in_sheets_not_in_lobby"""
+    try:
+        lobby_ids = [pid.strip() for pid in data.lobby_player_ids if pid.strip()]
+        registered = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None),
+            Entry.excluded == False
+        ).all()
+        registered_ids = {e.codm_id.strip().lower(): e for e in registered if e.codm_id}
+        in_lobby_not_registered = [pid for pid in lobby_ids if pid.lower() not in registered_ids]
+        in_sheets_not_in_lobby = [e.codm_id for e in registered if e.codm_id and e.codm_id.strip().lower() not in [p.lower() for p in lobby_ids]]
+        matches = [pid for pid in lobby_ids if pid.lower() in registered_ids]
+        return {
+            "success": True,
+            "matches": matches,
+            "in_lobby_not_registered": in_lobby_not_registered,
+            "in_sheets_not_in_lobby": in_sheets_not_in_lobby,
+            "match_count": len(matches),
+            "mismatch_count": len(in_lobby_not_registered) + len(in_sheets_not_in_lobby)
+        }
+    except Exception as e:
+        logger.error(f"Error in lobby cross-check: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/export-csv")
+async def export_csv(db: Session = Depends(get_db)):
+    """Export all entries as CSV file"""
+    from fastapi.responses import StreamingResponse
+    import csv
+    import io
+    try:
+        entries = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None),
+            Entry.excluded == False
+        ).order_by(Entry.created_at.desc()).all()
+        dollar_rate = get_live_dollar_rate()
+        per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Time", "Gamer ID Name", "Gamer Email", "Whatsapp Number", "Region", "Kill", "Per kill Value", "Money", "Dollar Rate", "Naira Amount", "", "Bank Name", "Bank Account Number", "Paid"])
+        for e in entries:
+            entry_fee = float(e.entry_fee) if e.entry_fee else 0
+            kill_count = e.kill_count or 0
+            payout_ngn = kill_count * per_kill_value * dollar_rate
+            writer.writerow([
+                e.created_at.strftime("%I:%M %p") if e.created_at else "",
+                e.codm_id or "",
+                e.contact_email or "",
+                e.contact_phone or "",
+                e.region or "",
+                kill_count,
+                per_kill_value,
+                f"${entry_fee / dollar_rate:.2f}" if dollar_rate else "$0",
+                dollar_rate,
+                f"₦{payout_ngn:,.2f}" if kill_count else f"₦{entry_fee:,.2f}",
+                "",
+                e.bank_name or "",
+                e.account_number or "",
+                "Yes" if e.payout_status == "completed" else ""
+            ])
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=clasharena_entries.csv"}
+        )
+    except Exception as e:
+        logger.error(f"Error exporting CSV: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/bulk-payout")
+async def bulk_payout(db: Session = Depends(get_db)):
+    """Trigger payout for all registered players with pending payout. Amount = kill_count * per_kill_value * dollar_rate"""
+    try:
+        per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+        dollar_rate = get_live_dollar_rate()
+        entries = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None),
+            Entry.excluded == False,
+            Entry.payout_status != "completed"
+        ).all()
+        processed = 0
+        errors = []
+        for entry in entries:
+            try:
+                amount = (entry.kill_count or 0) * per_kill_value * dollar_rate
+                payout = Payout(
+                    entry_id=entry.id,
+                    amount=amount,
+                    currency="NGN",
+                    status="completed",
+                    gateway="bank_transfer"
+                )
+                db.add(payout)
+                entry.payout_status = "completed"
+                db.commit()
+                processed += 1
+                try:
+                    update_entry_in_sheets(entry.payment_reference, {"codm_id": entry.codm_id, "contact_email": entry.contact_email, "payment_status": "completed"})
+                except Exception:
+                    pass
+            except Exception as e:
+                errors.append({"entry_id": entry.id, "error": str(e)})
+                db.rollback()
+        return {"success": True, "processed": processed, "total_pending": len(entries), "errors": errors}
+    except Exception as e:
+        logger.error(f"Error in bulk payout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/remove-player")
+async def remove_player(data: RemovePlayerRequest, db: Session = Depends(get_db)):
+    """Mark player as excluded (details incorrect - remove from lobby/payout)"""
+    try:
+        entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        entry.excluded = True
+        db.commit()
+        return {"success": True, "message": "Player removed from active list"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing player: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/restore-player")
+async def restore_player(data: RemovePlayerRequest, db: Session = Depends(get_db)):
+    """Restore excluded player back to active list"""
+    try:
+        entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        entry.excluded = False
+        db.commit()
+        return {"success": True, "message": "Player restored"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring player: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/admin/registration-count")

@@ -3,43 +3,260 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Thank You - ClashArena</title>
+    <title>Registration Complete — ClashArena</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .thank-you-page {
+            min-height: 100vh;
+            background: linear-gradient(180deg, #0a0a0a 0%, #111827 50%, #0a0a0a 100%);
+            padding: 40px 20px;
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        .thank-you-card {
+            max-width: 480px;
+            margin: 0 auto;
+            background: rgba(17, 24, 39, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(245, 173, 39, 0.15);
+            border-radius: 24px;
+            padding: 48px 40px;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5), 0 0 1px rgba(245, 173, 39, 0.1);
+        }
+        .thank-you-logo {
+            display: block;
+            margin: 0 auto 32px;
+            max-width: 120px;
+            height: auto;
+            filter: drop-shadow(0 4px 12px rgba(245, 173, 39, 0.3));
+        }
+        .success-badge {
+            width: 72px;
+            height: 72px;
+            margin: 0 auto 24px;
+            background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            color: white;
+            font-weight: 700;
+            box-shadow: 0 8px 32px rgba(16, 185, 129, 0.4);
+            animation: successPop 0.5s ease-out;
+        }
+        @keyframes successPop {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .thank-you-title {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+        }
+        .thank-you-subtitle {
+            font-size: 1rem;
+            color: #9CA3AF;
+            margin-bottom: 32px;
+            font-weight: 400;
+        }
+        .registration-details {
+            background: rgba(31, 41, 55, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 28px;
+            text-align: left;
+        }
+        .registration-details-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #6B7280;
+            margin-bottom: 6px;
+        }
+        .registration-details-value {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #F5AD27;
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+        }
+        .registration-details-note {
+            font-size: 0.875rem;
+            color: #9CA3AF;
+            margin-top: 12px;
+            line-height: 1.5;
+        }
+        .whatsapp-cta {
+            background: linear-gradient(135deg, rgba(37, 211, 102, 0.15) 0%, rgba(18, 140, 126, 0.15) 100%);
+            border: 1px solid rgba(37, 211, 102, 0.25);
+            border-radius: 16px;
+            padding: 28px;
+            margin-bottom: 28px;
+        }
+        .whatsapp-cta h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+        .whatsapp-cta p {
+            font-size: 0.875rem;
+            color: #9CA3AF;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        .whatsapp-countdown {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.875rem;
+            color: #9CA3AF;
+            margin-bottom: 16px;
+        }
+        .whatsapp-countdown strong {
+            color: #25D366;
+            font-weight: 600;
+        }
+        .btn-whatsapp-pro {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: #25D366;
+            color: white;
+            padding: 14px 28px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9375rem;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(37, 211, 102, 0.35);
+        }
+        .btn-whatsapp-pro:hover {
+            background: #22c55e;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(37, 211, 102, 0.4);
+        }
+        .btn-whatsapp-pro svg {
+            width: 20px;
+            height: 20px;
+        }
+        .next-steps-pro {
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            padding-top: 24px;
+        }
+        .next-steps-pro h3 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #6B7280;
+            margin-bottom: 16px;
+        }
+        .next-steps-pro ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .next-steps-pro li {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 0;
+            font-size: 0.9375rem;
+            color: #D1D5DB;
+        }
+        .next-steps-pro li::before {
+            content: '';
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            border-radius: 50%;
+        }
+        .next-steps-pro li.done::before {
+            content: '✓';
+            background: rgba(16, 185, 129, 0.25);
+            color: #10B981;
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .next-steps-pro li.pending::before {
+            background: rgba(245, 173, 39, 0.2);
+            border: 2px solid rgba(245, 173, 39, 0.5);
+        }
+        .skip-link {
+            font-size: 0.8125rem;
+            color: #6B7280;
+            margin-top: 12px;
+        }
+        .skip-link a {
+            color: #F5AD27;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .skip-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
 </head>
-<body style="background: var(--color-black); min-height: 100vh; padding: 20px;">
-    <div class="container">
-        <div class="thank-you-card">
-            <div class="logo-container" style="margin-bottom: 20px;">
-                <img src="/static/logo.jpg" alt="ClashArena Logo" class="logo" style="max-width: 150px;">
+<body class="thank-you-page">
+    <div class="thank-you-card">
+        <img src="/static/logo.jpg" alt="ClashArena" class="thank-you-logo">
+        <div class="success-badge">✓</div>
+        <h1 class="thank-you-title">You're In</h1>
+        <p class="thank-you-subtitle">Your registration has been confirmed</p>
+        
+        <div class="registration-details">
+            <div class="registration-details-label">Your CODM ID</div>
+            <div class="registration-details-value">{{ codm_id }}</div>
+            <p class="registration-details-note">Match details and lobby information will be sent to your email and phone shortly.</p>
+        </div>
+        
+        <div class="whatsapp-cta">
+            <h3>Join the player community</h3>
+            <p>Get real-time updates, match reminders, and connect with other competitors.</p>
+            <div class="whatsapp-countdown">
+                Redirecting in <strong id="countdown">5</strong> seconds
             </div>
-            <div class="success-icon">✓</div>
-            <h1>Registration Successful!</h1>
-            <p class="subtitle">Thank you for joining ClashArena Tournament</p>
-            
-            <div class="info-box">
-                <p><strong>CODM ID:</strong> {{ codm_id }}</p>
-                <p>You will receive match details via email and SMS.</p>
-            </div>
-            
-            <div class="whatsapp-box">
-                <h3>Join Our WhatsApp Group</h3>
-                <p>Get real-time updates and connect with other players</p>
-                <a href="{{ whatsapp_link }}" target="_blank" class="btn-whatsapp">
-                    📱 Join WhatsApp Group
-                </a>
-            </div>
-            
-            <div class="next-steps">
-                <h3>What's Next?</h3>
-                <ul>
-                    <li>✅ Payment confirmed</li>
-                    <li>✅ Registration completed</li>
-                    <li>⏳ Match details will be sent soon</li>
-                    <li>⏳ Tournament begins</li>
-                </ul>
-            </div>
+            <a href="{{ whatsapp_link }}" target="_blank" rel="noopener" class="btn-whatsapp-pro" id="whatsapp-link">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                Join WhatsApp Group
+            </a>
+            <p class="skip-link">Prefer not to wait? <a href="{{ whatsapp_link }}" target="_blank" rel="noopener">Join now</a></p>
+        </div>
+        
+        <div class="next-steps-pro">
+            <h3>What happens next</h3>
+            <ul>
+                <li class="done">Payment confirmed</li>
+                <li class="done">Registration complete</li>
+                <li class="pending">Match details sent to you</li>
+                <li class="pending">Tournament begins</li>
+            </ul>
         </div>
     </div>
+    <script>
+        (function() {
+            var countdown = 5;
+            var el = document.getElementById('countdown');
+            var interval = setInterval(function() {
+                countdown--;
+                if (el) el.textContent = countdown;
+                if (countdown <= 0) {
+                    clearInterval(interval);
+                    window.location.href = {{ whatsapp_link|tojson }};
+                }
+            }, 1000);
+        })();
+    </script>
 </body>
 </html>
 

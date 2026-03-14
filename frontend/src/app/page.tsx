@@ -2,7 +2,7 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
-import { useState, useEffect } from 'react'
+import { useState, useEffect f} from 'react'
 import { 
   TrophyIcon, 
   CurrencyDollarIcon, 

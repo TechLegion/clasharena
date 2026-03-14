@@ -20,7 +20,9 @@ class Entry(Base):
     account_number = Column(String, nullable=True)
     account_name = Column(String, nullable=True)
     entry_fee = Column(Numeric(10, 2), default=100.00)  # 100 NGN for testing
+    kill_count = Column(Integer, default=0, nullable=True)  # Kill count from match
     is_winner = Column(Boolean, default=False)
+    excluded = Column(Boolean, default=False)  # True = removed by admin (details incorrect)
     payout_status = Column(String, default="pending")  # pending, processing, completed, failed
     payout_reference = Column(String, nullable=True)
     whatsapp_notified = Column(Boolean, default=False)

@@ -30,7 +30,7 @@ async function markWinner(entryId, isWinner) {
 }
 
 async function triggerPayout(entryId) {
-    if (!confirm('Are you sure you want to trigger payout for this winner?')) {
+    if (!confirm('Are you sure you want to trigger payout for this player?')) {
         return;
     }
     
@@ -56,6 +56,147 @@ async function triggerPayout(entryId) {
     } catch (error) {
         console.error('Error:', error);
         alert('An error occurred. Please try again.');
+    }
+}
+
+async function bulkPayout() {
+    if (!confirm('Process payout for ALL players with pending status? Amount = kills × per_kill_value × exchange_rate')) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/admin/bulk-payout', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            alert(`Bulk payout complete! Processed: ${data.processed} of ${data.total_pending}. ${data.errors?.length ? 'Errors: ' + data.errors.length : ''}`);
+            location.reload();
+        } else {
+            alert('Bulk payout failed: ' + (data.detail || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    }
+}
+
+async function updateKillCount(entryId, killCount) {
+    const count = parseInt(killCount, 10);
+    if (isNaN(count) || count < 0) return;
+    try {
+        const response = await fetch('/api/admin/update-kill-count', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entry_id: entryId, kill_count: count })
+        });
+        const data = await response.json();
+        if (data.success) {
+            // Optional: show brief feedback
+        } else {
+            alert('Failed to update kill count');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to update kill count');
+    }
+}
+
+async function updateCodLobbyLink() {
+    const input = document.getElementById('cod-lobby-link-input');
+    const messageDiv = document.getElementById('cod-lobby-message');
+    const link = input.value.trim();
+    try {
+        messageDiv.innerHTML = '<span style="color: #4ecdc4;">Updating...</span>';
+        const response = await fetch('/api/admin/update-cod-lobby-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cod_lobby_link: link })
+        });
+        const data = await response.json();
+        if (data.success) {
+            messageDiv.innerHTML = '<span style="color: #51cf66;">✓ COD lobby link updated!</span>';
+            setTimeout(() => { messageDiv.innerHTML = ''; }, 3000);
+        } else {
+            messageDiv.innerHTML = '<span style="color: #ff6b6b;">Failed: ' + (data.detail || 'Unknown error') + '</span>';
+        }
+    } catch (error) {
+        messageDiv.innerHTML = '<span style="color: #ff6b6b;">An error occurred.</span>';
+    }
+}
+
+async function updateTournamentStatus() {
+    const select = document.getElementById('tournament-status-select');
+    const status = select.value;
+    try {
+        const response = await fetch('/api/admin/update-tournament-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+        const data = await response.json();
+        if (data.success) {
+            // Status updated
+        } else {
+            alert('Failed to update status');
+        }
+    } catch (error) {
+        alert('Failed to update tournament status');
+    }
+}
+
+async function removePlayer(entryId) {
+    if (!confirm('Remove this player from active list? (Details incorrect - they will be excluded from lobby check and payouts)')) return;
+    try {
+        const response = await fetch('/api/admin/remove-player', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entry_id: entryId })
+        });
+        const data = await response.json();
+        if (data.success) { location.reload(); } else { alert('Failed: ' + (data.detail || 'Unknown error')); }
+    } catch (e) { alert('Error removing player'); }
+}
+
+async function restorePlayer(entryId) {
+    try {
+        const response = await fetch('/api/admin/restore-player', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entry_id: entryId })
+        });
+        const data = await response.json();
+        if (data.success) { location.reload(); } else { alert('Failed'); }
+    } catch (e) { alert('Error restoring player'); }
+}
+
+async function lobbyCrossCheck() {
+    const textarea = document.getElementById('lobby-ids-input');
+    const resultDiv = document.getElementById('lobby-check-result');
+    const ids = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (ids.length === 0) {
+        resultDiv.innerHTML = '<span style="color: #ff6b6b;">Enter at least one CODM ID</span>';
+        resultDiv.style.display = 'block';
+        return;
+    }
+    try {
+        resultDiv.innerHTML = '<span style="color: #4ecdc4;">Checking...</span>';
+        resultDiv.style.display = 'block';
+        const response = await fetch('/api/admin/lobby-cross-check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lobby_player_ids: ids })
+        });
+        const data = await response.json();
+        if (data.success) {
+            let html = '<div style="color: var(--color-white);">';
+            html += '<p><strong>✓ Matches (' + data.match_count + '):</strong> ' + (data.matches.length ? data.matches.join(', ') : 'None') + '</p>';
+            html += '<p><strong style="color: #ff6b6b;">In lobby but NOT registered (' + data.in_lobby_not_registered.length + '):</strong> ' + (data.in_lobby_not_registered.length ? data.in_lobby_not_registered.join(', ') : 'None') + '</p>';
+            html += '<p><strong style="color: #ffd93d;">Registered but NOT in lobby (' + data.in_sheets_not_in_lobby.length + '):</strong> ' + (data.in_sheets_not_in_lobby.length ? data.in_sheets_not_in_lobby.join(', ') : 'None') + '</p>';
+            html += '</div>';
+            resultDiv.innerHTML = html;
+        } else {
+            resultDiv.innerHTML = '<span style="color: #ff6b6b;">Check failed</span>';
+        }
+    } catch (error) {
+        resultDiv.innerHTML = '<span style="color: #ff6b6b;">Error: ' + error.message + '</span>';
     }
 }
 
