@@ -25,9 +25,22 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Poll every 15 seconds.
+    // Update immediately, then poll.
     updateGroupCountdown();
     setInterval(updateGroupCountdown, 15000);
+
+    // Handle BFCache/back-navigation: the page might not reload,
+    // so we re-fetch the countdown when the page is shown again.
+    window.addEventListener('pageshow', function(e) {
+        if (e && e.persisted) {
+            updateGroupCountdown();
+        }
+    });
+
+    // Extra safety: refresh when user returns to the tab.
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) updateGroupCountdown();
+    });
     
     form.addEventListener('submit', async function(e) {
         e.preventDefault();

@@ -23,6 +23,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
     updateGroupCountdown();
     setInterval(updateGroupCountdown, 15000);
+
+    window.addEventListener('pageshow', function(e) {
+        if (e && e.persisted) {
+            updateGroupCountdown();
+        }
+    });
+
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) updateGroupCountdown();
+    });
     
     form.addEventListener('submit', async function(e) {
         e.preventDefault();

@@ -494,19 +494,13 @@ async def landing_page(request: Request):
     """Landing page with entry button"""
     entry_fee_ngn = get_entry_fee_ngn()
 
-    # Render initial countdown so the UI is correct even before polling.
-    db_gen = get_db()
-    db: Session = next(db_gen)
-    try:
-        status = calculate_registration_group_status(db)
-    finally:
-        db_gen.close()
-
     return templates.TemplateResponse("landing.html", {
         "request": request,
         "entry_fee": int(entry_fee_ngn),  # Display as integer (no decimals)
-        "group_number": status["group_number"],
-        "remaining_in_group": status["remaining_in_group"],
+        # Defaults until JS polling calls `/api/registration-group-status`.
+        # Avoids blocking page render on DB access.
+        "group_number": 1,
+        "remaining_in_group": LOBBY_GROUP_SIZE,
     })
 
 def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict:
@@ -784,12 +778,12 @@ async def intake_page(
         return RedirectResponse(url=f"/thank-you/{payment_reference}", status_code=302)
     
     # Payment verified, show intake form
-    status = calculate_registration_group_status(db)
     return templates.TemplateResponse("intake.html", {
         "request": request,
         "payment_reference": payment_reference,
-        "group_number": status["group_number"],
-        "remaining_in_group": status["remaining_in_group"],
+        # Defaults until JS polling calls `/api/registration-group-status`.
+        "group_number": 1,
+        "remaining_in_group": LOBBY_GROUP_SIZE,
     })
 
 @app.post("/api/submit-intake")
