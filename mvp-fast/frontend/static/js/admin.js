@@ -142,6 +142,31 @@ async function updateTournamentStatus() {
     }
 }
 
+async function deactivateAdminUser(adminUserId) {
+    if (!confirm('Remove this admin user? This will deactivate their login.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/admin/deactivate-admin-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ admin_user_id: adminUserId })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            // Refresh admin users list
+            loadAdminUsers();
+        } else {
+            alert('Failed to remove admin: ' + (data.message || data.detail || 'Unknown error'));
+        }
+    } catch (e) {
+        console.error('Error deactivating admin:', e);
+        alert('An error occurred while removing the admin user.');
+    }
+}
+
 async function removePlayer(entryId) {
     if (!confirm('Remove this player from active list? (Details incorrect - they will be excluded from lobby check and payouts)')) return;
     try {
@@ -351,10 +376,17 @@ async function loadAdminUsers() {
                 const statusBadge = admin.is_active 
                     ? '<span class="admin-user-status">● Active</span>'
                     : '<span style="color: var(--admin-danger); font-size: 12px;">● Inactive</span>';
-                html += `<div class="admin-user-card">
-                    <div class="admin-user-info"><strong>${admin.username}</strong><span>${admin.email || 'No email'}</span><span style="display:block;margin-top:4px;font-size:11px;">${new Date(admin.created_at).toLocaleDateString()}</span></div>
-                    <div>${statusBadge}</div>
-                </div>`;
+                    html += `<div class="admin-user-card">
+                        <div class="admin-user-info">
+                            <strong>${admin.username}</strong>
+                            <span>${admin.email || 'No email'}</span>
+                            <span style="display:block;margin-top:4px;font-size:11px;">${new Date(admin.created_at).toLocaleDateString()}</span>
+                        </div>
+                        <div class="admin-user-actions">
+                            ${statusBadge}
+                            <button type="button" class="admin-btn admin-btn-sm admin-btn-danger" style="margin-left: 10px;" onclick="deactivateAdminUser('${admin.id}')">Remove</button>
+                        </div>
+                    </div>`;
             });
             container.innerHTML = html;
         } else {

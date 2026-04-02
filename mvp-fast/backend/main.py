@@ -1326,6 +1326,9 @@ class LobbyCrossCheckRequest(BaseModel):
 class RemovePlayerRequest(BaseModel):
     entry_id: str
 
+class RemoveAdminUserRequest(BaseModel):
+    admin_user_id: str = Field(..., description="Admin user id to deactivate/remove")
+
 @app.get("/api/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Get admin statistics including registration count"""
@@ -1684,6 +1687,34 @@ async def create_admin_user(
         logger.error(f"Error creating admin user: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create admin user: {str(e)}")
+
+@app.post("/api/admin/deactivate-admin-user")
+async def deactivate_admin_user(
+    data: RemoveAdminUserRequest,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Deactivate/remove an admin user (sets is_active=false).
+
+    Important: admins cannot deactivate their own account to avoid lockout.
+    """
+    try:
+        target = db.query(AdminUser).filter(AdminUser.id == data.admin_user_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Admin user not found")
+
+        if target.id == admin.id:
+            raise HTTPException(status_code=400, detail="You cannot deactivate your own admin account")
+
+        target.is_active = False
+        db.commit()
+        return {"success": True, "message": "Admin user deactivated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deactivating admin user: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/admin/admin-users")
 async def get_admin_users(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
