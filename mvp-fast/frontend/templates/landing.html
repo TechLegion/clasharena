@@ -57,6 +57,17 @@
             </div>
             
             <!-- Entry Form -->
+            <div class="lobby-slot-section">
+                <div class="group-countdown" id="group-countdown">
+                    <div class="group-countdown-label">Lobby Registration Slots</div>
+                    <div class="group-countdown-main">
+                        Lobby <strong id="group-number">{{ group_number }}</strong>
+                        <span class="group-countdown-sep">•</span>
+                        <strong id="group-remaining">{{ remaining_in_group }}</strong> spots left
+                    </div>
+                </div>
+            </div>
+
             <form id="entryForm" class="entry-form">
                 <div class="form-group">
                     <input 

@@ -83,37 +83,46 @@ except Exception as e:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
-    """Dependency to get database session with retry logic (Railway-friendly)"""
+    """
+    FastAPI dependency that yields a SQLAlchemy session.
+
+    Important: retries must happen *before* yielding. If we retry around `yield`,
+    FastAPI may throw into the generator on exceptions, which can lead to:
+    `RuntimeError: generator didn't stop after throw()`.
+    """
     from sqlalchemy import text
+    import time
+
     max_retries = 5 if IS_RAILWAY else 3
-    retry_count = 0
-    db = None
-    
-    while retry_count < max_retries:
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        db = SessionLocal()
         try:
-            db = SessionLocal()
+            # Validate connection before the first `yield`.
             db.execute(text("SELECT 1"))
-            yield db
+            try:
+                yield db
+            finally:
+                db.close()
             return
-        except Exception as e:
-            retry_count += 1
-            if db:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-            if retry_count >= max_retries:
+        except Exception as exc:
+            last_exc = exc
+            try:
+                db.close()
+            except Exception:
+                pass
+
+            if attempt >= max_retries:
                 raise
-            import time
+
             # Exponential backoff: 1s, 2s, 4s, 8s (helps Railway cold starts)
-            delay = min(2 ** (retry_count - 1), 8)
+            delay = min(2 ** (attempt - 1), 8)
             time.sleep(delay)
-        finally:
-            if db and retry_count < max_retries:
-                try:
-                    db.close()
-                except Exception:
-                    pass
+
+    # Should be unreachable; `raise` happens on final attempt.
+    if last_exc:
+        raise last_exc
 
 def init_db():
     """Initialize database tables"""

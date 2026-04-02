@@ -89,6 +89,9 @@ PER_KILL_VALUE=0.6
 
 **Replace `your_spreadsheet_id_here`** with the Spreadsheet ID from Step 3.
 
+**Lobby-synced tab naming (optional):**
+- If you set `GOOGLE_SHEET_NAME=lobby 1`, the integration will automatically rotate Google Sheets tabs as `lobby 1`, `lobby 2`, `lobby 3`, ... when `MAX_ENTRIES_PER_SHEET` (default 100) is reached.
+
 ### Step 5: Verify File Structure
 
 Your `mvp-fast/` directory should have:
@@ -141,7 +144,7 @@ mvp-fast/
 - Check server logs for error messages
 - Verify `GOOGLE_SHEETS_ENABLED=true` in `.env`
 - Make sure Google Sheets API is enabled in Google Cloud Console
-- Check that the sheet name matches `GOOGLE_SHEET_NAME` (default: "Entries")
+- Check that the sheet name matches `GOOGLE_SHEET_NAME` (default: "Entries") or, for lobby naming, starts with `lobby 1`
 
 ### Issue: Wrong data format in sheet
 **Solution:**

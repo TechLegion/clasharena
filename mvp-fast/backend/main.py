@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Form, Request, Query
+from fastapi import FastAPI, HTTPException, Depends, status, Form, Request, Query, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
@@ -11,8 +11,11 @@ from pydantic import BaseModel, EmailStr, Field, validator
 import os
 import logging
 import hashlib
+import hmac
+import base64
 import secrets
 import json
+import time
 
 import sys
 from pathlib import Path
@@ -58,6 +61,68 @@ try:
 except ImportError:
     logger.warning("Exchange rate module not available. Using default rate.")
     def get_live_dollar_rate(): return float(os.getenv("DOLLAR_RATE", "100"))
+
+# Admin authentication (cookie-based) - blocks unauthenticated access
+ADMIN_SESSION_COOKIE_NAME = os.getenv("ADMIN_SESSION_COOKIE_NAME", "admin_session")
+ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", "")
+ADMIN_SESSION_TTL_SECONDS = int(os.getenv("ADMIN_SESSION_TTL_SECONDS", "604800"))  # 7 days
+if not ADMIN_SESSION_SECRET:
+    logger.warning(
+        "ADMIN_SESSION_SECRET is not set. Admin cookie authentication will be insecure. "
+        "Set ADMIN_SESSION_SECRET in mvp-fast/.env (recommended)."
+    )
+    ADMIN_SESSION_SECRET = "dev-insecure-admin-session-secret-change-me"
+
+# Helper: create/verify signed session tokens (no DB session table needed)
+def _make_admin_session_token(admin_id: str, issued_at: int) -> str:
+    payload = f"{admin_id}:{issued_at}"
+    signature = hmac.new(
+        ADMIN_SESSION_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+    payload_b64 = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("utf-8").rstrip("=")
+    return f"{payload_b64}.{signature}"
+
+def _verify_admin_session_token(token: str) -> Optional[str]:
+    if not token or "." not in token:
+        return None
+    try:
+        payload_b64, signature = token.split(".", 1)
+        padding = "=" * (-len(payload_b64) % 4)  # restore base64 padding
+        payload = base64.urlsafe_b64decode((payload_b64 + padding).encode("utf-8")).decode("utf-8")
+        expected_signature = hmac.new(
+            ADMIN_SESSION_SECRET.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected_signature):
+            return None
+
+        admin_id, issued_at_str = payload.split(":", 1)
+        issued_at = int(issued_at_str)
+        if time.time() - issued_at > ADMIN_SESSION_TTL_SECONDS:
+            return None
+        return admin_id
+    except Exception:
+        return None
+
+def get_current_admin(
+    admin_session: Optional[str] = Cookie(None, alias=ADMIN_SESSION_COOKIE_NAME),
+    db: Session = Depends(get_db),
+) -> AdminUser:
+    """Return the authenticated admin user from the signed cookie."""
+    if not admin_session:
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+
+    admin_id = _verify_admin_session_token(admin_session)
+    if not admin_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired admin session")
+
+    admin = db.query(AdminUser).filter(AdminUser.id == admin_id, AdminUser.is_active == True).first()
+    if not admin:
+        raise HTTPException(status_code=401, detail="Invalid or inactive admin session")
+    return admin
 
 app = FastAPI(title="ClashArena MVP", version="1.0.0")
 
@@ -141,6 +206,10 @@ if not BASE_URL:
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@clasharena.com")
 # Registration milestone for testing (set to 10 for testing phase, change to 100 for production)
 REGISTRATION_MILESTONE = int(os.getenv("REGISTRATION_MILESTONE", "10"))
+
+# Public-facing lobby grouping size (countdown resets every N registrations).
+# This should match how your lobby/WhatsApp groups are rotated (default: 100).
+LOBBY_GROUP_SIZE = int(os.getenv("LOBBY_GROUP_SIZE", os.getenv("MAX_ENTRIES_PER_SHEET", "100")))
 
 def get_entry_fee_ngn() -> float:
     """Calculate entry fee in NGN based on $1 USD and current exchange rate"""
@@ -424,9 +493,20 @@ def check_registration_milestone(db: Session):
 async def landing_page(request: Request):
     """Landing page with entry button"""
     entry_fee_ngn = get_entry_fee_ngn()
+
+    # Render initial countdown so the UI is correct even before polling.
+    db_gen = get_db()
+    db: Session = next(db_gen)
+    try:
+        status = calculate_registration_group_status(db)
+    finally:
+        db_gen.close()
+
     return templates.TemplateResponse("landing.html", {
         "request": request,
-        "entry_fee": int(entry_fee_ngn)  # Display as integer (no decimals)
+        "entry_fee": int(entry_fee_ngn),  # Display as integer (no decimals)
+        "group_number": status["group_number"],
+        "remaining_in_group": status["remaining_in_group"],
     })
 
 def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict:
@@ -704,9 +784,12 @@ async def intake_page(
         return RedirectResponse(url=f"/thank-you/{payment_reference}", status_code=302)
     
     # Payment verified, show intake form
+    status = calculate_registration_group_status(db)
     return templates.TemplateResponse("intake.html", {
         "request": request,
-        "payment_reference": payment_reference
+        "payment_reference": payment_reference,
+        "group_number": status["group_number"],
+        "remaining_in_group": status["remaining_in_group"],
     })
 
 @app.post("/api/submit-intake")
@@ -854,11 +937,51 @@ async def thank_you_page(request: Request, payment_reference: str, db: Session =
         "codm_id": entry.codm_id
     })
 
+def calculate_registration_group_status(db: Session) -> dict:
+    """Compute current lobby group + remaining spots until the next reset."""
+    group_size = max(1, LOBBY_GROUP_SIZE)
+
+    total_registrations = db.query(Entry).filter(
+        Entry.payment_status == "completed",
+        Entry.codm_id.isnot(None),
+        Entry.excluded == False,
+    ).count()
+
+    group_number = (total_registrations // group_size) + 1
+    within_group_count = total_registrations % group_size
+    remaining_in_group = group_size - within_group_count
+
+    if remaining_in_group < 0:
+        remaining_in_group = 0
+
+    return {
+        "group_size": group_size,
+        "total_registrations": total_registrations,
+        "group_number": group_number,
+        "within_group_count": within_group_count,
+        "remaining_in_group": remaining_in_group,
+    }
+
+
+@app.get("/api/registration-group-status")
+async def registration_group_status(db: Session = Depends(get_db)):
+    """
+    Public endpoint for the countdown.
+
+    Groups reset every `LOBBY_GROUP_SIZE` registrations.
+    Group number is 1-based: group 1 starts from 0 -> 99 registrations.
+    """
+    status = calculate_registration_group_status(db)
+    return {
+        "success": True,
+        **status,
+    }
+
 # Admin Routes
 @app.get("/admin/login", response_class=HTMLResponse)
-async def admin_login_page(request: Request):
+async def admin_login_page(request: Request, error: Optional[str] = Query(None)):
     """Admin login page"""
-    return templates.TemplateResponse("admin_login.html", {"request": request})
+    return templates.TemplateResponse("admin_login.html", {"request": request, "error": error})
 
 @app.post("/admin/login")
 async def admin_login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
@@ -878,12 +1001,19 @@ async def admin_login(request: Request, username: str = Form(...), password: str
                 "error": "Account is disabled"
             }, status_code=403)
         
-        # Create session token (simple implementation)
-        # In production, use proper session management with JWT or cookies
-        session_token = secrets.token_urlsafe(32)
-        # Store in response headers or cookies (simplified for MVP)
-        
-        return RedirectResponse(url="/admin/dashboard", status_code=302)
+        issued_at = int(time.time())
+        session_token = _make_admin_session_token(admin.id, issued_at)
+        response = RedirectResponse(url="/admin/dashboard", status_code=302)
+        response.set_cookie(
+            key=ADMIN_SESSION_COOKIE_NAME,
+            value=session_token,
+            httponly=True,
+            secure=(request.url.scheme == "https"),
+            samesite="lax",
+            max_age=ADMIN_SESSION_TTL_SECONDS,
+            path="/",
+        )
+        return response
     except Exception as e:
         logger.error(f"Admin login error: {e}")
         return templates.TemplateResponse("admin_login.html", {
@@ -892,8 +1022,24 @@ async def admin_login(request: Request, username: str = Form(...), password: str
         }, status_code=500)
 
 @app.get("/admin/dashboard", response_class=HTMLResponse)
-async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
+async def admin_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin_session: Optional[str] = Cookie(None, alias=ADMIN_SESSION_COOKIE_NAME),
+):
     """Admin dashboard"""
+    # HTML UX: redirect back to login page instead of returning JSON 401.
+    if not admin_session:
+        return RedirectResponse(url="/admin/login?error=Admin%20authentication%20required", status_code=302)
+
+    admin_id = _verify_admin_session_token(admin_session)
+    if not admin_id:
+        return RedirectResponse(url="/admin/login?error=Invalid%20or%20expired%20session", status_code=302)
+
+    admin = db.query(AdminUser).filter(AdminUser.id == admin_id, AdminUser.is_active == True).first()
+    if not admin:
+        return RedirectResponse(url="/admin/login?error=Invalid%20or%20inactive%20session", status_code=302)
+
     entries = db.query(Entry).filter(Entry.payment_status == "completed").order_by(Entry.created_at.desc()).all()
     
     # Count total registrations (exclude removed players)
@@ -933,8 +1079,23 @@ async def admin_dashboard(request: Request, db: Session = Depends(get_db)):
         "stats": stats
     })
 
+@app.get("/admin/logout")
+async def admin_logout(request: Request):
+    """Clear admin session cookie and redirect to login page."""
+    response = RedirectResponse(url="/admin/login?error=Signed%20out", status_code=302)
+    response.set_cookie(
+        key=ADMIN_SESSION_COOKIE_NAME,
+        value="",
+        httponly=True,
+        secure=(request.url.scheme == "https"),
+        samesite="lax",
+        max_age=0,
+        path="/",
+    )
+    return response
+
 @app.post("/api/admin/mark-winner")
-async def mark_winner(data: MarkWinnerRequest, db: Session = Depends(get_db)):
+async def mark_winner(data: MarkWinnerRequest, db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Mark entry as winner"""
     entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
     if not entry:
@@ -948,7 +1109,7 @@ async def mark_winner(data: MarkWinnerRequest, db: Session = Depends(get_db)):
     return {"success": True, "message": "Winner status updated"}
 
 @app.post("/api/admin/trigger-payout")
-async def trigger_payout(data: TriggerPayoutRequest, db: Session = Depends(get_db)):
+async def trigger_payout(data: TriggerPayoutRequest, db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Trigger payout for entry. Amount = kill_count * per_kill_value * dollar_rate"""
     entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
     if not entry:
@@ -1007,7 +1168,8 @@ async def trigger_payout(data: TriggerPayoutRequest, db: Session = Depends(get_d
 async def get_entries(
     status_filter: Optional[str] = None,
     winner_only: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Get all entries (API endpoint)"""
     query = db.query(Entry).filter(Entry.payment_status == "completed")
@@ -1171,7 +1333,7 @@ class RemovePlayerRequest(BaseModel):
     entry_id: str
 
 @app.get("/api/admin/stats")
-async def get_admin_stats(db: Session = Depends(get_db)):
+async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Get admin statistics including registration count"""
     try:
         # Count total registrations (entries with payment completed and codm_id filled)
@@ -1228,7 +1390,8 @@ async def get_admin_stats(db: Session = Depends(get_db)):
 @app.post("/api/admin/update-whatsapp-link")
 async def update_whatsapp_link(
     data: UpdateWhatsAppLinkRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Update WhatsApp group link (Admin only)"""
     try:
@@ -1250,7 +1413,8 @@ async def update_whatsapp_link(
 @app.post("/api/admin/update-cod-lobby-link")
 async def update_cod_lobby_link(
     data: UpdateCodLobbyLinkRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Update COD lobby link (Admin only)"""
     try:
@@ -1263,7 +1427,8 @@ async def update_cod_lobby_link(
 @app.post("/api/admin/update-tournament-status")
 async def update_tournament_status(
     data: UpdateTournamentStatusRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Update tournament status: active, closed, archived"""
     try:
@@ -1278,7 +1443,8 @@ async def update_tournament_status(
 @app.post("/api/admin/update-kill-count")
 async def update_kill_count(
     data: UpdateKillCountRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Update kill count for an entry and sync to Google Sheets"""
     try:
@@ -1307,7 +1473,8 @@ async def update_kill_count(
 @app.post("/api/admin/lobby-cross-check")
 async def lobby_cross_check(
     data: LobbyCrossCheckRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Compare lobby player IDs against registered entries. Returns matches, in_lobby_not_registered, in_sheets_not_in_lobby"""
     try:
@@ -1334,7 +1501,7 @@ async def lobby_cross_check(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/admin/export-csv")
-async def export_csv(db: Session = Depends(get_db)):
+async def export_csv(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Export all entries as CSV file"""
     from fastapi.responses import StreamingResponse
     import csv
@@ -1381,7 +1548,7 @@ async def export_csv(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/bulk-payout")
-async def bulk_payout(db: Session = Depends(get_db)):
+async def bulk_payout(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Trigger payout for all registered players with pending payout. Amount = kill_count * per_kill_value * dollar_rate"""
     try:
         per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
@@ -1421,7 +1588,7 @@ async def bulk_payout(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/remove-player")
-async def remove_player(data: RemovePlayerRequest, db: Session = Depends(get_db)):
+async def remove_player(data: RemovePlayerRequest, db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Mark player as excluded (details incorrect - remove from lobby/payout)"""
     try:
         entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
@@ -1437,7 +1604,7 @@ async def remove_player(data: RemovePlayerRequest, db: Session = Depends(get_db)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/restore-player")
-async def restore_player(data: RemovePlayerRequest, db: Session = Depends(get_db)):
+async def restore_player(data: RemovePlayerRequest, db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Restore excluded player back to active list"""
     try:
         entry = db.query(Entry).filter(Entry.id == data.entry_id).first()
@@ -1453,7 +1620,7 @@ async def restore_player(data: RemovePlayerRequest, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/admin/registration-count")
-async def get_registration_count(db: Session = Depends(get_db)):
+async def get_registration_count(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Get current registration count"""
     try:
         # Count total registrations (entries with payment completed and codm_id filled)
@@ -1479,7 +1646,8 @@ async def get_registration_count(db: Session = Depends(get_db)):
 @app.post("/api/admin/create-admin-user")
 async def create_admin_user(
     data: CreateAdminUserRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """Create a new admin user (Admin only)"""
     try:
@@ -1524,7 +1692,7 @@ async def create_admin_user(
         raise HTTPException(status_code=500, detail=f"Failed to create admin user: {str(e)}")
 
 @app.get("/api/admin/admin-users")
-async def get_admin_users(db: Session = Depends(get_db)):
+async def get_admin_users(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Get list of all admin users"""
     try:
         admins = db.query(AdminUser).order_by(AdminUser.created_at.desc()).all()

@@ -3,6 +3,7 @@ Google Sheets integration for saving user data
 """
 import os
 import logging
+import re
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -16,6 +17,23 @@ CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 # Support for base64 encoded credentials in environment variable (for Railway)
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")  # Base64 encoded credentials
 MAX_ENTRIES_PER_SHEET = int(os.getenv("MAX_ENTRIES_PER_SHEET", "100"))  # Create new sheet after this many entries
+
+
+def _parse_lobby_sheet_name(sheet_name: str) -> Optional[tuple[str, int]]:
+    """
+    If `GOOGLE_SHEET_NAME` is set like `lobby 1`, return ("lobby", 1).
+    This enables lobby-synced tab naming: lobby 1, lobby 2, lobby 3, ...
+    """
+    if not sheet_name:
+        return None
+
+    match = re.match(r"^\s*([Ll]obby)\s*(\d+)\s*$", sheet_name, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    prefix_word = match.group(1)
+    start_index = int(match.group(2))
+    return prefix_word, start_index
 
 try:
     from google.oauth2.service_account import Credentials
@@ -244,48 +262,118 @@ try:
             return None
     
     def get_active_sheet_name() -> str:
-        """Get the active sheet name, creating a new one if current sheet has 100+ entries"""
+        """Get the active sheet name, rotating/creating tabs at 100 entries."""
         if not GOOGLE_SHEETS_ENABLED or not SPREADSHEET_ID:
             return SHEET_NAME
-        
-        # Get base sheet name (original name without " - Part X")
+
+        # Lobby-style naming:
+        # If `GOOGLE_SHEET_NAME` is set like `lobby 1`, rotate tabs as:
+        #   lobby 1, lobby 2, lobby 3, ...
+        lobby_info = _parse_lobby_sheet_name(SHEET_NAME)
+        if lobby_info:
+            prefix_word, start_index = lobby_info
+
+            service = get_sheets_service()
+            if not service:
+                return SHEET_NAME
+
+            try:
+                spreadsheet = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+                sheets = spreadsheet.get("sheets", [])
+
+                existing_titles = [
+                    (sheet.get("properties", {}).get("title", "") or "") for sheet in sheets
+                ]
+                existing_titles_lower = {t.lower() for t in existing_titles}
+
+                lobby_regex = re.compile(
+                    rf"^\s*{re.escape(prefix_word)}\s*(\d+)\s*$",
+                    flags=re.IGNORECASE,
+                )
+                matching_indices = []
+                for title in existing_titles:
+                    m = lobby_regex.match(title)
+                    if m:
+                        matching_indices.append(int(m.group(1)))
+
+                current_index = max(matching_indices) if matching_indices else start_index
+                current_sheet = f"{prefix_word} {current_index}"
+
+                # Ensure the current lobby tab exists (create if missing).
+                if current_sheet.lower() not in existing_titles_lower:
+                    request_body = {
+                        "requests": [
+                            {"addSheet": {"properties": {"title": current_sheet}}}
+                        ]
+                    }
+                    service.spreadsheets().batchUpdate(
+                        spreadsheetId=SPREADSHEET_ID, body=request_body
+                    ).execute()
+                    ensure_header_row(SPREADSHEET_ID, current_sheet)
+
+                entry_count = count_entries_in_sheet(SPREADSHEET_ID, current_sheet)
+
+                # If we've reached the limit, create the next lobby tab.
+                if entry_count >= MAX_ENTRIES_PER_SHEET:
+                    next_index = current_index + 1
+                    new_sheet_name = f"{prefix_word} {next_index}"
+                    logger.info(
+                        f"Sheet '{current_sheet}' has {entry_count} entries (limit: {MAX_ENTRIES_PER_SHEET}). "
+                        f"Creating new lobby sheet: {new_sheet_name}"
+                    )
+
+                    request_body = {
+                        "requests": [
+                            {"addSheet": {"properties": {"title": new_sheet_name}}}
+                        ]
+                    }
+                    service.spreadsheets().batchUpdate(
+                        spreadsheetId=SPREADSHEET_ID, body=request_body
+                    ).execute()
+                    ensure_header_row(SPREADSHEET_ID, new_sheet_name)
+                    return new_sheet_name
+
+                return current_sheet
+
+            except Exception as e:
+                logger.error(f"Error getting active lobby sheet: {e}")
+                return SHEET_NAME
+
+        # Default behavior (part-style tabs) - existing logic.
         base_name = SHEET_NAME.split(" - Part ")[0] if " - Part " in SHEET_NAME else SHEET_NAME
-        
-        # Get all sheets with the same base name
+
         service = get_sheets_service()
         if not service:
             return SHEET_NAME
-        
+
         try:
             spreadsheet = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-            sheets = spreadsheet.get('sheets', [])
-            
-            # Find all sheets with the same base name
+            sheets = spreadsheet.get("sheets", [])
+
             matching_sheets = []
             for sheet in sheets:
-                sheet_title = sheet['properties']['title']
+                sheet_title = sheet["properties"]["title"]
                 if sheet_title == base_name or sheet_title.startswith(f"{base_name} - Part "):
                     matching_sheets.append(sheet_title)
-            
-            # Sort sheets to find the latest one
+
             matching_sheets.sort()
             current_sheet = matching_sheets[-1] if matching_sheets else SHEET_NAME
-            
-            # Count entries in the current/latest sheet
+
             entry_count = count_entries_in_sheet(SPREADSHEET_ID, current_sheet)
-            
-            # If we've reached the limit, create a new sheet
+
             if entry_count >= MAX_ENTRIES_PER_SHEET:
-                logger.info(f"Sheet '{current_sheet}' has {entry_count} entries (limit: {MAX_ENTRIES_PER_SHEET}). Creating new sheet...")
+                logger.info(
+                    f"Sheet '{current_sheet}' has {entry_count} entries (limit: {MAX_ENTRIES_PER_SHEET}). Creating new sheet..."
+                )
                 new_sheet_name = create_new_sheet(SPREADSHEET_ID, base_name)
                 if new_sheet_name:
                     logger.info(f"Created and switched to new sheet: {new_sheet_name}")
                     return new_sheet_name
                 else:
                     logger.warning("Failed to create new sheet, continuing with current sheet")
-            
+
             return current_sheet
-            
+
         except Exception as e:
             logger.error(f"Error getting active sheet: {e}")
             return SHEET_NAME

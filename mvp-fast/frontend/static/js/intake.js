@@ -3,6 +3,26 @@ document.addEventListener('DOMContentLoaded', function() {
     const submitBtn = document.getElementById('submitBtn');
     const errorMsg = document.getElementById('errorMsg');
     const successMsg = document.getElementById('successMsg');
+
+    const groupNumberEl = document.getElementById('group-number');
+    const groupRemainingEl = document.getElementById('group-remaining');
+
+    async function updateGroupCountdown() {
+        if (!groupNumberEl || !groupRemainingEl) return;
+        try {
+            const res = await fetch('/api/registration-group-status');
+            const data = await res.json();
+            if (data && data.success) {
+                groupNumberEl.textContent = data.group_number;
+                groupRemainingEl.textContent = data.remaining_in_group;
+            }
+        } catch (e) {
+            console.error('Failed to fetch group countdown:', e);
+        }
+    }
+
+    updateGroupCountdown();
+    setInterval(updateGroupCountdown, 15000);
     
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
