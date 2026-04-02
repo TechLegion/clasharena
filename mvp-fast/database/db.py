@@ -98,14 +98,14 @@ def get_db():
 
     for attempt in range(1, max_retries + 1):
         db = SessionLocal()
+
+        # IMPORTANT:
+        # Only catch/retry connection errors that happen *before* yielding.
+        # Any exception thrown into the generator by FastAPI (e.g. HTTPException
+        # from the endpoint) must not be caught here, or you can get:
+        #   RuntimeError: generator didn't stop after throw()
         try:
-            # Validate connection before the first `yield`.
             db.execute(text("SELECT 1"))
-            try:
-                yield db
-            finally:
-                db.close()
-            return
         except Exception as exc:
             last_exc = exc
             try:
@@ -119,6 +119,14 @@ def get_db():
             # Exponential backoff: 1s, 2s, 4s, 8s (helps Railway cold starts)
             delay = min(2 ** (attempt - 1), 8)
             time.sleep(delay)
+            continue
+
+        try:
+            yield db
+        finally:
+            db.close()
+
+        return
 
     # Should be unreachable; `raise` happens on final attempt.
     if last_exc:
