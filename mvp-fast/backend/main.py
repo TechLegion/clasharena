@@ -1648,37 +1648,80 @@ async def create_admin_user(
 ):
     """Create a new admin user (Admin only)"""
     try:
-        # Check if username already exists
-        existing_username = db.query(AdminUser).filter(AdminUser.username == data.username).first()
-        if existing_username:
-            raise HTTPException(status_code=400, detail=f"Username '{data.username}' already exists")
-        
-        # Check if email already exists (if provided)
+        # Reactivate/update if username already exists (deactivation keeps the row)
+        existing_by_username = db.query(AdminUser).filter(AdminUser.username == data.username).first()
+        if existing_by_username:
+            # If an email is provided, validate uniqueness if it differs.
+            if data.email and existing_by_username.email != data.email:
+                conflicting_email = (
+                    db.query(AdminUser)
+                    .filter(AdminUser.email == data.email, AdminUser.id != existing_by_username.id)
+                    .first()
+                )
+                if conflicting_email:
+                    raise HTTPException(status_code=400, detail=f"Email '{data.email}' already exists")
+
+                existing_by_username.email = data.email
+
+            existing_by_username.password_hash = hash_password(data.password)
+            existing_by_username.is_active = True
+
+            db.commit()
+            db.refresh(existing_by_username)
+
+            logger.info(f"Admin user reactivated/updated: {data.username}")
+            return {
+                "success": True,
+                "message": f"Admin user '{data.username}' reactivated successfully",
+                "admin_id": existing_by_username.id,
+                "username": existing_by_username.username,
+                "email": existing_by_username.email,
+                "reactivated": True,
+            }
+
+        # If username doesn't exist, check if email already exists (and potentially reactivate by email)
         if data.email:
-            existing_email = db.query(AdminUser).filter(AdminUser.email == data.email).first()
-            if existing_email:
-                raise HTTPException(status_code=400, detail=f"Email '{data.email}' already exists")
-        
-        # Create new admin user
-        admin = AdminUser(
+            existing_by_email = db.query(AdminUser).filter(AdminUser.email == data.email).first()
+            if existing_by_email:
+                # Username is unique; since it didn't exist above, this should be safe.
+                existing_by_email.username = data.username
+                existing_by_email.password_hash = hash_password(data.password)
+                existing_by_email.is_active = True
+
+                db.commit()
+                db.refresh(existing_by_email)
+
+                logger.info(f"Admin user reactivated/updated by email: {data.username}")
+                return {
+                    "success": True,
+                    "message": f"Admin user '{data.username}' reactivated successfully",
+                    "admin_id": existing_by_email.id,
+                    "username": existing_by_email.username,
+                    "email": existing_by_email.email,
+                    "reactivated": True,
+                }
+
+        # Create new admin user (both username and email are available)
+        new_admin = AdminUser(
             username=data.username,
             password_hash=hash_password(data.password),
             email=data.email,
-            is_active=True
+            is_active=True,
         )
-        
-        db.add(admin)
+
+        db.add(new_admin)
         db.commit()
-        db.refresh(admin)
-        
+        db.refresh(new_admin)
+
         logger.info(f"New admin user created: {data.username}")
-        
+
         return {
             "success": True,
             "message": f"Admin user '{data.username}' created successfully",
-            "admin_id": admin.id,
-            "username": admin.username,
-            "email": admin.email
+            "admin_id": new_admin.id,
+            "username": new_admin.username,
+            "email": new_admin.email,
+            "reactivated": False,
         }
     
     except HTTPException:
