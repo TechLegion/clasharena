@@ -107,6 +107,18 @@ function syncRegistrationLobbyNameUI(name) {
     if (disp) disp.textContent = v.trim() ? v : '—';
 }
 
+function syncOpsStripLobbyCycle(lobbyName, epoch) {
+    const lob = document.getElementById('admin-ops-strip-lobby');
+    const cyc = document.getElementById('admin-ops-strip-cycle');
+    if (lob && lobbyName !== undefined) {
+        const t = lobbyName != null ? String(lobbyName).trim() : '';
+        lob.textContent = t ? t : '—';
+    }
+    if (cyc != null && epoch !== undefined && epoch !== null) {
+        cyc.textContent = String(epoch);
+    }
+}
+
 async function saveRegistrationLobbyName() {
     const input = document.getElementById('registration-lobby-name-input');
     const messageDiv = document.getElementById('lobby-name-message');
@@ -125,6 +137,7 @@ async function saveRegistrationLobbyName() {
         }
         if (data.success) {
             syncRegistrationLobbyNameUI(data.registration_lobby_name);
+            syncOpsStripLobbyCycle(data.registration_lobby_name, undefined);
             messageDiv.innerHTML = '<span class="admin-msg-success">✓ Saved</span>';
             setTimeout(() => { messageDiv.innerHTML = ''; }, 3000);
         } else {
@@ -168,6 +181,7 @@ async function resetRegistrationLobby() {
             if (data.registration_lobby_name !== undefined) {
                 syncRegistrationLobbyNameUI(data.registration_lobby_name);
             }
+            syncOpsStripLobbyCycle(data.registration_lobby_name, data.registration_lobby_epoch);
             setTimeout(() => { messageDiv.innerHTML = ''; }, 5000);
         } else {
             messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || data.message || 'Unknown error') + '</span>';
@@ -478,8 +492,183 @@ async function loadAdminUsers() {
     }
 }
 
+function syncEntryFeeAutoUi() {
+    const auto = document.getElementById('entry-fee-auto');
+    const ngn = document.getElementById('entry-fee-ngn');
+    if (!auto || !ngn) return;
+    ngn.disabled = auto.checked;
+}
+
+function applyRuntimeSettingsToForm(data) {
+    if (!data || !data.success) return;
+    const auto = document.getElementById('entry-fee-auto');
+    const ngn = document.getElementById('entry-fee-ngn');
+    const lobby = document.getElementById('lobby-group-size-input');
+    const mile = document.getElementById('registration-milestone-input');
+    const perKill = document.getElementById('per-kill-usd-input');
+    if (auto) auto.checked = !!data.entry_fee_auto;
+    if (ngn) {
+        ngn.value = data.entry_fee_ngn_override != null && data.entry_fee_ngn_override !== undefined
+            ? String(Math.round(Number(data.entry_fee_ngn_override)))
+            : '';
+    }
+    if (lobby) lobby.value = data.lobby_group_size;
+    if (mile) mile.value = data.registration_milestone;
+    if (perKill) perKill.value = data.per_kill_value_usd;
+    syncEntryFeeAutoUi();
+    syncOpsStripFromRuntime(data);
+}
+
+function syncOpsStripFromRuntime(data) {
+    if (!data || !data.success) return;
+    const fee = document.getElementById('admin-ops-strip-fee');
+    const grp = document.getElementById('admin-ops-strip-group');
+    if (fee != null && data.entry_fee_effective_ngn != null && data.entry_fee_effective_ngn !== undefined) {
+        fee.textContent = '₦' + String(Math.round(Number(data.entry_fee_effective_ngn)));
+    }
+    if (grp != null && data.lobby_group_size != null && data.lobby_group_size !== undefined) {
+        grp.textContent = String(data.lobby_group_size);
+    }
+}
+
+async function saveRuntimeSettings() {
+    const msg = document.getElementById('runtime-settings-message');
+    const auto = document.getElementById('entry-fee-auto');
+    const ngn = document.getElementById('entry-fee-ngn');
+    const lobby = document.getElementById('lobby-group-size-input');
+    const mile = document.getElementById('registration-milestone-input');
+    const perKill = document.getElementById('per-kill-usd-input');
+    if (!msg || !auto || !ngn || !lobby || !mile || !perKill) return;
+
+    const body = {};
+    if (auto.checked) {
+        body.entry_fee_auto = true;
+    } else {
+        const v = parseFloat(ngn.value);
+        if (!Number.isFinite(v) || v < 1) {
+            msg.innerHTML = '<span class="admin-msg-error">Enter a valid entry fee in NGN or enable automatic fee.</span>';
+            return;
+        }
+        body.entry_fee_ngn = v;
+    }
+
+    const lg = parseInt(lobby.value, 10);
+    if (!Number.isFinite(lg) || lg < 1) {
+        msg.innerHTML = '<span class="admin-msg-error">Players per group must be at least 1.</span>';
+        return;
+    }
+    body.lobby_group_size = lg;
+
+    const ms = parseInt(mile.value, 10);
+    if (!Number.isFinite(ms) || ms < 1) {
+        msg.innerHTML = '<span class="admin-msg-error">Milestone must be at least 1.</span>';
+        return;
+    }
+    body.registration_milestone = ms;
+
+    const pk = parseFloat(perKill.value);
+    if (!Number.isFinite(pk) || pk <= 0) {
+        msg.innerHTML = '<span class="admin-msg-error">Per-kill USD must be greater than 0.</span>';
+        return;
+    }
+    body.per_kill_value_usd = pk;
+
+    const saveBtn = document.getElementById('save-runtime-settings-btn');
+    try {
+        if (saveBtn) saveBtn.disabled = true;
+        msg.innerHTML = '<span class="admin-msg-success">Saving...</span>';
+        const res = await fetch('/api/admin/runtime-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            msg.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || res.status) + '</span>';
+            return;
+        }
+        applyRuntimeSettingsToForm(data);
+        msg.innerHTML = '<span class="admin-msg-success">✓ Saved</span>';
+        setTimeout(function() { msg.innerHTML = ''; }, 4000);
+    } catch (e) {
+        msg.innerHTML = '<span class="admin-msg-error">Request failed</span>';
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
+async function clearRuntimeSettingField(which) {
+    const msg = document.getElementById('runtime-settings-message');
+    const body = {};
+    if (which === 'lobby_group') body.clear_lobby_group_size = true;
+    else if (which === 'milestone') body.clear_registration_milestone = true;
+    else if (which === 'per_kill') body.clear_per_kill_value = true;
+    else return;
+    try {
+        const res = await fetch('/api/admin/runtime-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            if (msg) msg.innerHTML = '<span class="admin-msg-error">Failed</span>';
+            return;
+        }
+        applyRuntimeSettingsToForm(data);
+        if (msg) {
+            msg.innerHTML = '<span class="admin-msg-success">✓ Reset to env default</span>';
+            setTimeout(function() { msg.innerHTML = ''; }, 3000);
+        }
+    } catch (e) {
+        if (msg) msg.innerHTML = '<span class="admin-msg-error">Request failed</span>';
+    }
+}
+
+function initEntriesTableFilter() {
+    const input = document.getElementById('entries-search-input');
+    const table = document.getElementById('admin-entries-table');
+    const hint = document.getElementById('entries-filter-hint');
+    if (!input || !table) return;
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    function apply() {
+        const raw = (input.value || '').trim().toLowerCase();
+        const q = raw.replace(/\s+/g, ' ');
+        let visible = 0;
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const hay = (row.getAttribute('data-admin-search') || '');
+            const ok = !q || hay.indexOf(q) !== -1;
+            row.style.display = ok ? '' : 'none';
+            if (ok) visible += 1;
+        }
+        if (hint) {
+            if (!q) {
+                hint.textContent = rows.length ? rows.length + ' entries' : 'No entries';
+            } else {
+                hint.textContent = visible + ' shown' + (visible !== rows.length ? ' of ' + rows.length : '');
+            }
+        }
+    }
+
+    input.addEventListener('input', apply);
+    input.addEventListener('search', apply);
+    apply();
+}
+
 // Initialize auto-refresh on page load
 document.addEventListener('DOMContentLoaded', function() {
+    initEntriesTableFilter();
+
+    const efa = document.getElementById('entry-fee-auto');
+    if (efa) {
+        efa.addEventListener('change', syncEntryFeeAutoUi);
+        syncEntryFeeAutoUi();
+    }
+
     // Refresh registration count every 30 seconds
     setInterval(refreshRegistrationCount, 30000);
     

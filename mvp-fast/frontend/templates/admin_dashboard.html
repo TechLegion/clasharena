@@ -11,7 +11,7 @@
     <div class="admin-container">
         <header class="admin-header">
             <div class="admin-brand">
-                <a href="/" style="display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit;">
+                <a href="/" class="admin-brand-link">
                     <img src="/static/logo.jpg" alt="ClashArena">
                     <h1>Dashboard</h1>
                 </a>
@@ -25,10 +25,24 @@
                 </select>
                 <a href="/api/admin/export-csv" class="admin-btn admin-btn-secondary">Export CSV</a>
                 <button type="button" class="admin-btn admin-btn-primary" onclick="bulkPayout()">Bulk Payout</button>
+                <a href="/admin/logout" class="admin-btn admin-btn-secondary">Sign out</a>
             </div>
         </header>
 
-        <div class="admin-stats">
+        <p class="admin-ops-strip" title="Current lobby and economics (see Settings to change)">
+            <span class="admin-ops-strip-item"><strong>Lobby</strong> <span id="admin-ops-strip-lobby">{% if stats.registration_lobby_name %}{{ stats.registration_lobby_name }}{% else %}—{% endif %}</span></span>
+            <span class="admin-ops-strip-item"><strong>Cycle</strong> <span id="admin-ops-strip-cycle">{{ stats.registration_lobby_epoch }}</span></span>
+            <span class="admin-ops-strip-item"><strong>Entry fee</strong> <span id="admin-ops-strip-fee">₦{{ stats.entry_fee_effective_ngn | int }}</span></span>
+            <span class="admin-ops-strip-item"><strong>Group size</strong> <span id="admin-ops-strip-group">{{ stats.lobby_group_size }}</span></span>
+        </p>
+
+        <nav class="admin-jump-nav" aria-label="Page sections">
+            <a href="#admin-stats">Stats</a>
+            <a href="#admin-settings">Settings</a>
+            <a href="#admin-entries">Entries</a>
+        </nav>
+
+        <div class="admin-stats" id="admin-stats">
             <div class="admin-stat admin-stat-featured">
                 <div class="admin-stat-label">Registrations</div>
                 <div class="admin-stat-value" id="total-registrations">{{ stats.total_registrations }}</div>
@@ -56,7 +70,7 @@
             </div>
         </div>
 
-        <div class="admin-section">
+        <div class="admin-section" id="admin-settings">
             <div class="admin-section-header">Settings</div>
             <div class="admin-section-body">
                 <div class="admin-field">
@@ -78,6 +92,56 @@
                         <button type="button" class="admin-btn admin-btn-primary" onclick="updateCodLobbyLink()">Update</button>
                     </div>
                     <div id="cod-lobby-message" class="admin-msg"></div>
+                </div>
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
+                    <label class="admin-field-label">Tournament economics</label>
+                    <p class="admin-field-hint">Change prices and limits without editing server files. Env defaults are shown in each hint for reference.</p>
+
+                    <div class="admin-field" style="margin-top: 12px;">
+                        <label class="admin-field-label" for="entry-fee-auto">Entry fee (public checkout)</label>
+                        <label class="admin-checkbox-label" style="display: flex; align-items: center; gap: 8px; margin: 8px 0;">
+                            <input type="checkbox" id="entry-fee-auto" {% if stats.entry_fee_override_ngn is none %}checked{% endif %}>
+                            <span>Automatic — {{ stats.env_entry_fee_usd }} USD × live exchange rate (effective now: ₦{{ stats.entry_fee_effective_ngn | int }})</span>
+                        </label>
+                        <div class="admin-field-row" style="margin-top: 8px;">
+                            <input type="number" id="entry-fee-ngn" class="admin-input" style="max-width: 180px;" min="1" step="1" placeholder="Fixed ₦ amount"
+                                value="{% if stats.entry_fee_override_ngn is not none %}{{ stats.entry_fee_override_ngn | int }}{% endif %}">
+                        </div>
+                    </div>
+
+                    <div class="admin-field-grid" style="margin-top: 16px;">
+                        <div class="admin-field">
+                            <label class="admin-field-label" for="lobby-group-size-input">Players per lobby group</label>
+                            <p class="admin-field-hint">When this many players finish registration in a group, the spots counter resets for the next group. Env default: {{ stats.env_lobby_group_size }}</p>
+                            <div class="admin-field-row">
+                                <input type="number" id="lobby-group-size-input" class="admin-input" min="1" max="10000" step="1" value="{{ stats.lobby_group_size }}">
+                                <button type="button" class="admin-btn admin-btn-secondary" onclick="clearRuntimeSettingField('lobby_group')">Use env default</button>
+                            </div>
+                        </div>
+                        <div class="admin-field">
+                            <label class="admin-field-label" for="registration-milestone-input">Registration milestone</label>
+                            <p class="admin-field-hint">Notify admin when total registrations (all time) reach this count. Env default: {{ stats.env_registration_milestone }}</p>
+                            <div class="admin-field-row">
+                                <input type="number" id="registration-milestone-input" class="admin-input" min="1" max="5000000" step="1" value="{{ stats.milestone_threshold }}">
+                                <button type="button" class="admin-btn admin-btn-secondary" onclick="clearRuntimeSettingField('milestone')">Use env default</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="admin-field" style="margin-top: 16px;">
+                        <label class="admin-field-label" for="per-kill-usd-input">Per-kill value (USD)</label>
+                        <p class="admin-field-hint">Used for payout estimates: kills × this × NGN/USD rate. Env default: {{ stats.env_per_kill_usd }}</p>
+                        <div class="admin-field-row">
+                            <input type="number" id="per-kill-usd-input" class="admin-input" style="max-width: 160px;" min="0.01" max="50000" step="0.01" value="{{ stats.per_kill_value_usd }}">
+                            <button type="button" class="admin-btn admin-btn-secondary" onclick="clearRuntimeSettingField('per_kill')">Use env default</button>
+                        </div>
+                    </div>
+
+                    <button type="button" id="save-runtime-settings-btn" class="admin-btn admin-btn-primary" onclick="saveRuntimeSettings()" style="margin-top: 16px;">Save economics</button>
+                    <div id="runtime-settings-message" class="admin-msg"></div>
                 </div>
 
                 <div class="admin-divider"></div>
@@ -137,10 +201,17 @@
             </div>
         </div>
 
-        <div class="admin-section">
-            <div class="admin-section-header">Entries</div>
+        <div class="admin-section" id="admin-entries">
+            <div class="admin-section-header admin-section-header-entries">
+                <span>Entries</span>
+                <div class="admin-entries-toolbar">
+                    <label class="admin-sr-only" for="entries-search-input">Search entries</label>
+                    <input type="search" id="entries-search-input" class="admin-input admin-entries-search" placeholder="Search ref, CODM, phone, email, bank…" autocomplete="off" spellcheck="false">
+                    <span id="entries-filter-hint" class="admin-entries-count" aria-live="polite"></span>
+                </div>
+            </div>
             <div class="admin-table-wrap">
-                <table class="admin-table">
+                <table class="admin-table" id="admin-entries-table">
                     <thead>
                         <tr>
                             <th>Ref</th>
@@ -155,7 +226,7 @@
                     </thead>
                     <tbody>
                         {% for entry in entries %}
-                        <tr {% if entry.excluded %}class="admin-row-excluded"{% endif %}>
+                        <tr {% if entry.excluded %}class="admin-row-excluded"{% endif %} data-admin-search="{{ ([entry.payment_reference, entry.codm_id or '', entry.contact_phone or '', entry.contact_email or '', entry.bank_name or '', entry.account_number or '', entry.account_name or '']|join(' '))|lower|e }}">
                             <td class="admin-cell-mono">{{ entry.payment_reference }}</td>
                             <td>{{ entry.codm_id or "—" }}</td>
                             <td>
@@ -203,6 +274,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/admin.js"></script>
+    <script src="/static/js/admin.js?v=3"></script>
 </body>
 </html>

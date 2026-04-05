@@ -272,6 +272,10 @@ def normalize_phone_digits(phone: Optional[str]) -> str:
 
 REGISTRATION_LOBBY_EPOCH_KEY = "registration_lobby_epoch"
 REGISTRATION_LOBBY_NAME_KEY = "registration_lobby_name"
+ENTRY_FEE_NGN_OVERRIDE_KEY = "entry_fee_ngn_override"
+LOBBY_GROUP_SIZE_KEY = "lobby_group_size"
+REGISTRATION_MILESTONE_THRESHOLD_KEY = "registration_milestone_threshold"
+PER_KILL_VALUE_USD_KEY = "per_kill_value_usd"
 
 
 def get_registration_lobby_epoch(db: Session) -> int:
@@ -336,9 +340,109 @@ def set_registration_lobby_name(db: Session, name: str, admin_id: Optional[str] 
     logger.info("Registration lobby name set to: %r", cleaned or "(empty)")
 
 
+def _app_setting_raw(db: Session, key: str) -> Optional[str]:
+    row = db.query(AppSettings).filter(AppSettings.key == key).first()
+    if not row or row.value is None:
+        return None
+    s = str(row.value).strip()
+    return s if s else None
+
+
+def _set_app_setting(
+    db: Session,
+    key: str,
+    value: str,
+    description: str,
+    admin_id: Optional[str] = None,
+) -> None:
+    row = db.query(AppSettings).filter(AppSettings.key == key).first()
+    if row:
+        row.value = value
+        row.updated_by = admin_id
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(
+            AppSettings(
+                key=key,
+                value=value,
+                description=description,
+                updated_by=admin_id,
+            )
+        )
+    db.commit()
+
+
+def get_entry_fee_ngn_override(db: Session) -> Optional[float]:
+    raw = _app_setting_raw(db, ENTRY_FEE_NGN_OVERRIDE_KEY)
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def get_entry_fee_ngn(db: Session) -> float:
+    """Entry fee in NGN: admin override in app_settings, else ENTRY_FEE_USD × live rate."""
+    override = get_entry_fee_ngn_override(db)
+    if override is not None:
+        return round(override, 2)
+    try:
+        dollar_rate = get_live_dollar_rate()
+        entry_fee_ngn = ENTRY_FEE_USD * dollar_rate
+        logger.info(
+            "Entry fee calculated: $%s USD = ₦%.2f NGN (rate: %s)",
+            ENTRY_FEE_USD,
+            entry_fee_ngn,
+            dollar_rate,
+        )
+        return round(entry_fee_ngn, 2)
+    except Exception as e:
+        logger.error("Error calculating entry fee: %s", e)
+        default_rate = float(os.getenv("DOLLAR_RATE", "100"))
+        return round(ENTRY_FEE_USD * default_rate, 2)
+
+
+def get_lobby_group_size(db: Session) -> int:
+    raw = _app_setting_raw(db, LOBBY_GROUP_SIZE_KEY)
+    if raw is not None:
+        try:
+            v = int(raw)
+            if v >= 1:
+                return v
+        except ValueError:
+            pass
+    return max(1, LOBBY_GROUP_SIZE)
+
+
+def get_registration_milestone_threshold(db: Session) -> int:
+    raw = _app_setting_raw(db, REGISTRATION_MILESTONE_THRESHOLD_KEY)
+    if raw is not None:
+        try:
+            v = int(raw)
+            if v >= 1:
+                return v
+        except ValueError:
+            pass
+    return max(1, REGISTRATION_MILESTONE)
+
+
+def get_per_kill_value_usd(db: Session) -> float:
+    raw = _app_setting_raw(db, PER_KILL_VALUE_USD_KEY)
+    if raw is not None:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return float(os.getenv("PER_KILL_VALUE", "0.6"))
+
+
 def get_target_lobby_for_next_registrant(db: Session) -> int:
     """Lobby batch the next completed intake joins (same indexing as /api/registration-group-status)."""
-    group_size = max(1, LOBBY_GROUP_SIZE)
+    group_size = max(1, get_lobby_group_size(db))
     epoch = get_registration_lobby_epoch(db)
     total = db.query(Entry).filter(
         Entry.payment_status == "completed",
@@ -367,19 +471,6 @@ def _payment_epoch_for_duplicate_checks(entry: Entry) -> int:
         return int(entry.payment_completed_epoch)
     return 0
 
-
-def get_entry_fee_ngn() -> float:
-    """Calculate entry fee in NGN based on $1 USD and current exchange rate"""
-    try:
-        dollar_rate = get_live_dollar_rate()
-        entry_fee_ngn = ENTRY_FEE_USD * dollar_rate
-        logger.info(f"Entry fee calculated: ${ENTRY_FEE_USD} USD = ₦{entry_fee_ngn:.2f} NGN (rate: {dollar_rate})")
-        return round(entry_fee_ngn, 2)
-    except Exception as e:
-        logger.error(f"Error calculating entry fee: {e}")
-        # Fallback to default rate if exchange rate fails
-        default_rate = float(os.getenv("DOLLAR_RATE", "100"))
-        return round(ENTRY_FEE_USD * default_rate, 2)
 
 # Pydantic Models
 class PaymentVerificationRequest(BaseModel):
@@ -599,6 +690,7 @@ def set_tournament_status(db: Session, status: str, admin_id: str = None):
 def check_registration_milestone(db: Session):
     """Check if registration milestone has been reached and notify admin"""
     try:
+        threshold = get_registration_milestone_threshold(db)
         # Count completed registrations (entries with payment completed and codm_id filled)
         total_registrations = db.query(Entry).filter(
             Entry.payment_status == "completed",
@@ -606,17 +698,17 @@ def check_registration_milestone(db: Session):
         ).count()
         
         # Check if we've reached the milestone threshold
-        if total_registrations >= REGISTRATION_MILESTONE:
+        if total_registrations >= threshold:
             # Check if we've already notified for this milestone
             milestone = db.query(RegistrationMilestone).filter(
-                RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
+                RegistrationMilestone.milestone_count == threshold,
                 RegistrationMilestone.notified == True
             ).first()
             
             if not milestone:
                 # Create milestone record
                 milestone = RegistrationMilestone(
-                    milestone_count=REGISTRATION_MILESTONE,
+                    milestone_count=threshold,
                     notified=False
                 )
                 db.add(milestone)
@@ -627,8 +719,8 @@ def check_registration_milestone(db: Session):
                     entry_id=None,
                     notification_type="email",
                     recipient=ADMIN_EMAIL,
-                    subject=f"🎉 Milestone Reached: {REGISTRATION_MILESTONE} Users Registered!",
-                    message=f"Congratulations! Your tournament has reached {REGISTRATION_MILESTONE} registered users. Total registrations: {total_registrations}",
+                    subject=f"🎉 Milestone Reached: {threshold} Users Registered!",
+                    message=f"Congratulations! Your tournament has reached {threshold} registered users. Total registrations: {total_registrations}",
                     db=db
                 )
                 
@@ -637,7 +729,7 @@ def check_registration_milestone(db: Session):
                 milestone.notification_sent_at = datetime.utcnow()
                 db.commit()
                 
-                logger.info(f"🎉 Milestone reached: {REGISTRATION_MILESTONE} users registered! Total: {total_registrations}")
+                logger.info("🎉 Milestone reached: %s users registered! Total: %s", threshold, total_registrations)
                 return True
         
         return False
@@ -649,12 +741,12 @@ def check_registration_milestone(db: Session):
 @app.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request, db: Session = Depends(get_db)):
     """Landing page with entry button"""
-    entry_fee_ngn = get_entry_fee_ngn()
+    entry_fee_ngn = get_entry_fee_ngn(db)
     try:
         cycle = calculate_registration_group_status(db)
         remaining_in_group = cycle["remaining_in_group"]
     except Exception:
-        remaining_in_group = LOBBY_GROUP_SIZE
+        remaining_in_group = get_lobby_group_size(db)
 
     return templates.TemplateResponse("landing.html", {
         "request": request,
@@ -820,8 +912,8 @@ async def initiate_payment(
                 "redirect_url": f"/thank-you/{already_in_open_lobby.payment_reference}",
             }
         
-        # Calculate entry fee in NGN based on current exchange rate
-        entry_fee_ngn = get_entry_fee_ngn()
+        # Calculate entry fee in NGN (admin override or USD × rate)
+        entry_fee_ngn = get_entry_fee_ngn(db)
         
         # Generate unique payment reference
         payment_ref = f"CLASH_{secrets.token_hex(8).upper()}"
@@ -955,7 +1047,7 @@ async def intake_page(
         cycle = calculate_registration_group_status(db)
         remaining_in_group = cycle["remaining_in_group"]
     except Exception:
-        remaining_in_group = LOBBY_GROUP_SIZE
+        remaining_in_group = get_lobby_group_size(db)
 
     return templates.TemplateResponse("intake.html", {
         "request": request,
@@ -1012,7 +1104,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             Entry.excluded == False,
             Entry.lobby_epoch == current_epoch,
         ).count()
-        lobby_group = (total_before // max(1, LOBBY_GROUP_SIZE)) + 1
+        lobby_group = (total_before // max(1, get_lobby_group_size(db))) + 1
 
         codm_key = normalize_codm_for_match(data.codm_id)
         phone_key = normalize_phone_digits(phone_cleaned)
@@ -1060,7 +1152,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
         try:
             # Get live exchange rate (cached for 1 hour)
             dollar_rate = get_live_dollar_rate()
-            per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+            per_kill_value = get_per_kill_value_usd(db)
             
             logger.info(f"Using exchange rate: 1 USD = {dollar_rate} NGN")
             
@@ -1152,7 +1244,7 @@ async def thank_you_page(request: Request, payment_reference: str, db: Session =
 
 def calculate_registration_group_status(db: Session) -> dict:
     """Compute current lobby group + remaining spots until the next reset (current admin lobby epoch only)."""
-    group_size = max(1, LOBBY_GROUP_SIZE)
+    group_size = max(1, get_lobby_group_size(db))
     epoch = get_registration_lobby_epoch(db)
 
     total_registrations_db = db.query(Entry).filter(
@@ -1198,7 +1290,7 @@ async def registration_group_status(db: Session = Depends(get_db)):
     is enabled and a lobby tab name is set, also reads that tab's data row count and uses
     max(DB, sheet) so manually added sheet rows reduce "spots left" like app registrations.
 
-    Within an epoch, groups advance every `LOBBY_GROUP_SIZE` registrations.
+    Within an epoch, groups advance every configured lobby group size (admin or env default).
     """
     status = calculate_registration_group_status(db)
     return {
@@ -1283,9 +1375,10 @@ async def admin_dashboard(
     cod_lobby_link = get_cod_lobby_link(db)
     tournament_status = get_tournament_status(db)
     
+    milestone_threshold = get_registration_milestone_threshold(db)
     # Check if milestone reached
     milestone = db.query(RegistrationMilestone).filter(
-        RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
+        RegistrationMilestone.milestone_count == milestone_threshold,
         RegistrationMilestone.notified == True
     ).first()
 
@@ -1300,13 +1393,21 @@ async def admin_dashboard(
         "whatsapp_link": whatsapp_link,
         "cod_lobby_link": cod_lobby_link,
         "tournament_status": tournament_status,
-        "milestone_threshold": REGISTRATION_MILESTONE,
+        "milestone_threshold": milestone_threshold,
         "milestone_reached": milestone is not None,
         "registration_lobby_epoch": cycle["registration_lobby_epoch"],
         "registration_lobby_name": cycle["registration_lobby_name"],
         "current_cycle_registrations": cycle["total_registrations"],
         "current_cycle_group_number": cycle["group_number"],
         "current_cycle_remaining_in_group": cycle["remaining_in_group"],
+        "entry_fee_effective_ngn": get_entry_fee_ngn(db),
+        "entry_fee_override_ngn": get_entry_fee_ngn_override(db),
+        "lobby_group_size": get_lobby_group_size(db),
+        "per_kill_value_usd": get_per_kill_value_usd(db),
+        "env_entry_fee_usd": ENTRY_FEE_USD,
+        "env_lobby_group_size": LOBBY_GROUP_SIZE,
+        "env_registration_milestone": REGISTRATION_MILESTONE,
+        "env_per_kill_usd": float(os.getenv("PER_KILL_VALUE", "0.6")),
     }
     
     return templates.TemplateResponse("admin_dashboard.html", {
@@ -1354,7 +1455,7 @@ async def trigger_payout(data: TriggerPayoutRequest, db: Session = Depends(get_d
     if entry.payout_status == "completed":
         raise HTTPException(status_code=400, detail="Payout already completed")
     
-    per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+    per_kill_value = get_per_kill_value_usd(db)
     dollar_rate = get_live_dollar_rate()
     amount = (entry.kill_count or 0) * per_kill_value * dollar_rate
     if amount <= 0:
@@ -1585,6 +1686,117 @@ class SetRegistrationLobbyNameRequest(BaseModel):
     lobby_name: str = Field(default="", max_length=200, description="Shown on public signup; empty hides the name line")
 
 
+class UpdateRuntimeSettingsRequest(BaseModel):
+    """Partial update: only send fields you want to change."""
+
+    entry_fee_auto: Optional[bool] = None
+    entry_fee_ngn: Optional[float] = Field(None, gt=0, le=50_000_000)
+    lobby_group_size: Optional[int] = Field(None, ge=1, le=10_000)
+    clear_lobby_group_size: Optional[bool] = None
+    registration_milestone: Optional[int] = Field(None, ge=1, le=5_000_000)
+    clear_registration_milestone: Optional[bool] = None
+    per_kill_value_usd: Optional[float] = Field(None, gt=0, le=50_000)
+    clear_per_kill_value: Optional[bool] = None
+
+
+def _runtime_settings_api_dict(db: Session) -> dict:
+    """Shared payload for GET/POST /api/admin/runtime-settings."""
+    return {
+        "success": True,
+        "entry_fee_auto": get_entry_fee_ngn_override(db) is None,
+        "entry_fee_ngn_override": get_entry_fee_ngn_override(db),
+        "entry_fee_effective_ngn": get_entry_fee_ngn(db),
+        "lobby_group_size": get_lobby_group_size(db),
+        "lobby_group_overridden": _app_setting_raw(db, LOBBY_GROUP_SIZE_KEY) is not None,
+        "registration_milestone": get_registration_milestone_threshold(db),
+        "registration_milestone_overridden": _app_setting_raw(db, REGISTRATION_MILESTONE_THRESHOLD_KEY) is not None,
+        "per_kill_value_usd": get_per_kill_value_usd(db),
+        "per_kill_overridden": _app_setting_raw(db, PER_KILL_VALUE_USD_KEY) is not None,
+        "env_entry_fee_usd": ENTRY_FEE_USD,
+        "env_lobby_group_size": LOBBY_GROUP_SIZE,
+        "env_registration_milestone": REGISTRATION_MILESTONE,
+        "env_per_kill_usd": float(os.getenv("PER_KILL_VALUE", "0.6")),
+    }
+
+
+@app.get("/api/admin/runtime-settings")
+async def get_runtime_settings(
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Current tournament economics (admin overrides + effective values)."""
+    return _runtime_settings_api_dict(db)
+
+
+@app.post("/api/admin/runtime-settings")
+async def update_runtime_settings(
+    data: UpdateRuntimeSettingsRequest,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Update entry fee, lobby size, milestone target, or per-kill USD (stored in app_settings)."""
+    try:
+        if data.entry_fee_auto is True:
+            _set_app_setting(
+                db,
+                ENTRY_FEE_NGN_OVERRIDE_KEY,
+                "",
+                "Fixed entry fee in NGN; empty = use ENTRY_FEE_USD × live rate",
+                admin.id,
+            )
+        elif data.entry_fee_ngn is not None:
+            _set_app_setting(
+                db,
+                ENTRY_FEE_NGN_OVERRIDE_KEY,
+                str(round(float(data.entry_fee_ngn), 2)),
+                "Fixed entry fee in NGN; empty = use ENTRY_FEE_USD × live rate",
+                admin.id,
+            )
+
+        if data.clear_lobby_group_size is True:
+            db.query(AppSettings).filter(AppSettings.key == LOBBY_GROUP_SIZE_KEY).delete()
+            db.commit()
+        elif data.lobby_group_size is not None:
+            _set_app_setting(
+                db,
+                LOBBY_GROUP_SIZE_KEY,
+                str(int(data.lobby_group_size)),
+                "Players per lobby group for countdown / sheet grouping",
+                admin.id,
+            )
+
+        if data.clear_registration_milestone is True:
+            db.query(AppSettings).filter(AppSettings.key == REGISTRATION_MILESTONE_THRESHOLD_KEY).delete()
+            db.commit()
+        elif data.registration_milestone is not None:
+            _set_app_setting(
+                db,
+                REGISTRATION_MILESTONE_THRESHOLD_KEY,
+                str(int(data.registration_milestone)),
+                "Total registrations target for milestone notification",
+                admin.id,
+            )
+
+        if data.clear_per_kill_value is True:
+            db.query(AppSettings).filter(AppSettings.key == PER_KILL_VALUE_USD_KEY).delete()
+            db.commit()
+        elif data.per_kill_value_usd is not None:
+            _set_app_setting(
+                db,
+                PER_KILL_VALUE_USD_KEY,
+                str(round(float(data.per_kill_value_usd), 6)),
+                "USD per kill for payout estimate (× NGN/USD rate)",
+                admin.id,
+            )
+
+        return _runtime_settings_api_dict(db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error updating runtime settings: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Get admin statistics including registration count"""
@@ -1612,9 +1824,10 @@ async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depe
         cod_lobby_link = get_cod_lobby_link(db)
         tournament_status = get_tournament_status(db)
         
+        milestone_threshold = get_registration_milestone_threshold(db)
         # Check if milestone reached
         milestone = db.query(RegistrationMilestone).filter(
-            RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
+            RegistrationMilestone.milestone_count == milestone_threshold,
             RegistrationMilestone.notified == True
         ).first()
 
@@ -1630,7 +1843,7 @@ async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depe
                 "whatsapp_link": whatsapp_link,
                 "cod_lobby_link": cod_lobby_link,
                 "tournament_status": tournament_status,
-                "milestone_threshold": REGISTRATION_MILESTONE,
+                "milestone_threshold": milestone_threshold,
                 "milestone_reached": milestone is not None,
                 "milestone_notified_at": milestone.notification_sent_at.isoformat() if milestone else None,
                 "registration_lobby_epoch": cycle["registration_lobby_epoch"],
@@ -1763,7 +1976,7 @@ async def update_kill_count(
         db.refresh(entry)
         # Sync to Google Sheets
         try:
-            per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+            per_kill_value = get_per_kill_value_usd(db)
             dollar_rate = get_live_dollar_rate()
             kc = data.kill_count or 0
             payout_ngn = kc * per_kill_value * dollar_rate
@@ -1827,7 +2040,7 @@ async def export_csv(db: Session = Depends(get_db), admin: AdminUser = Depends(g
             Entry.excluded == False
         ).order_by(Entry.created_at.desc()).all()
         dollar_rate = get_live_dollar_rate()
-        per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+        per_kill_value = get_per_kill_value_usd(db)
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow([
@@ -1871,7 +2084,7 @@ async def export_csv(db: Session = Depends(get_db), admin: AdminUser = Depends(g
 async def bulk_payout(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Trigger payout for all registered players with pending payout. Amount = kill_count * per_kill_value * dollar_rate"""
     try:
-        per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+        per_kill_value = get_per_kill_value_usd(db)
         dollar_rate = get_live_dollar_rate()
         entries = db.query(Entry).filter(
             Entry.payment_status == "completed",
@@ -1952,13 +2165,14 @@ async def get_registration_count(db: Session = Depends(get_db), admin: AdminUser
             Entry.payment_status == "completed",
             Entry.codm_id.isnot(None)
         ).count()
+        milestone_threshold = get_registration_milestone_threshold(db)
         
         return {
             "success": True,
             "total_registrations": total_registrations,
-            "milestone_threshold": REGISTRATION_MILESTONE,
-            "milestone_reached": total_registrations >= REGISTRATION_MILESTONE,
-            "remaining_to_milestone": max(0, REGISTRATION_MILESTONE - total_registrations)
+            "milestone_threshold": milestone_threshold,
+            "milestone_reached": total_registrations >= milestone_threshold,
+            "remaining_to_milestone": max(0, milestone_threshold - total_registrations)
         }
     except Exception as e:
         logger.error(f"Error getting registration count: {e}")
