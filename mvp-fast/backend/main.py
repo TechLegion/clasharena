@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Form, Request, Query, Cookie
+from fastapi import FastAPI, HTTPException, Depends, status, Form, Request, Query, Cookie, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
@@ -52,8 +52,8 @@ try:
     from google_sheets import save_entry_to_sheets, update_entry_in_sheets
 except ImportError:
     logger.warning("Google Sheets integration not available. Install google-api-python-client and google-auth to enable.")
-    def save_entry_to_sheets(entry_data): return False
-    def update_entry_in_sheets(payment_reference, updates): return False
+    def save_entry_to_sheets(entry_data, target_sheet=None): return False
+    def update_entry_in_sheets(payment_reference, updates, target_sheet=None): return False
 
 # Import exchange rate module
 try:
@@ -158,13 +158,54 @@ try:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS kill_count INTEGER DEFAULT 0"))
             conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS excluded BOOLEAN DEFAULT FALSE"))
+            conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS lobby_group INTEGER"))
+            conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS lobby_epoch INTEGER DEFAULT 0"))
+            conn.execute(text("UPDATE entries SET lobby_epoch = 0 WHERE lobby_epoch IS NULL"))
+            conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS payment_completed_epoch INTEGER"))
+            conn.execute(
+                text(
+                    "UPDATE entries SET payment_completed_epoch = 0 "
+                    "WHERE payment_status = 'completed' AND payment_completed_epoch IS NULL"
+                )
+            )
             conn.commit()
-        logger.info("Database migrations applied (kill_count, excluded)")
+        logger.info("Database migrations applied (kill_count, excluded, lobby_group, lobby_epoch, payment_completed_epoch)")
     except Exception as mig_e:
         if "already exists" in str(mig_e).lower():
             pass  # Columns exist, skip
         else:
             logger.warning(f"Migration skipped (tables may not exist yet): {mig_e}")
+    # Assign lobby_group for legacy rows (chronological order, same buckets as LOBBY_GROUP_SIZE)
+    try:
+        from database.db import engine
+        from sqlalchemy.orm import sessionmaker
+
+        MigSession = sessionmaker(autoflush=False, autocommit=False, bind=engine)
+        mdb = MigSession()
+        try:
+            ordered = (
+                mdb.query(Entry)
+                .filter(
+                    Entry.payment_status == "completed",
+                    Entry.codm_id.isnot(None),
+                    Entry.excluded == False,
+                )
+                .order_by(Entry.created_at.asc())
+                .all()
+            )
+            if ordered and any(e.lobby_group is None for e in ordered):
+                gs = max(
+                    1,
+                    int(os.getenv("LOBBY_GROUP_SIZE", os.getenv("MAX_ENTRIES_PER_SHEET", "100"))),
+                )
+                for i, e in enumerate(ordered):
+                    e.lobby_group = (i // gs) + 1
+                mdb.commit()
+                logger.info("Backfilled lobby_group for %s registrations", len(ordered))
+        finally:
+            mdb.close()
+    except Exception as bf_e:
+        logger.warning("lobby_group backfill skipped: %s", bf_e)
 except Exception as e:
     logger.error(f"Database initialization error: {e}")
     logger.error("Make sure PostgreSQL is running and the database exists.")
@@ -210,6 +251,117 @@ REGISTRATION_MILESTONE = int(os.getenv("REGISTRATION_MILESTONE", "10"))
 # Public-facing lobby grouping size (countdown resets every N registrations).
 # This should match how your lobby/WhatsApp groups are rotated (default: 100).
 LOBBY_GROUP_SIZE = int(os.getenv("LOBBY_GROUP_SIZE", os.getenv("MAX_ENTRIES_PER_SHEET", "100")))
+
+
+def normalize_codm_for_match(codm_id: Optional[str]) -> str:
+    if not codm_id:
+        return ""
+    return codm_id.strip().lower()
+
+
+def normalize_phone_digits(phone: Optional[str]) -> str:
+    if not phone:
+        return ""
+    return "".join(c for c in phone if c.isdigit())
+
+
+REGISTRATION_LOBBY_EPOCH_KEY = "registration_lobby_epoch"
+REGISTRATION_LOBBY_NAME_KEY = "registration_lobby_name"
+
+
+def get_registration_lobby_epoch(db: Session) -> int:
+    """Monotonic counter bumped when admin opens a new registration lobby cycle."""
+    setting = db.query(AppSettings).filter(AppSettings.key == REGISTRATION_LOBBY_EPOCH_KEY).first()
+    if not setting or not (setting.value or "").strip():
+        return 0
+    try:
+        return int(setting.value.strip())
+    except ValueError:
+        return 0
+
+
+def bump_registration_lobby_epoch(db: Session, admin_id: Optional[str] = None) -> int:
+    """Increment registration lobby epoch (manual reset). Returns the new epoch value."""
+    cur = get_registration_lobby_epoch(db)
+    new_epoch = cur + 1
+    setting = db.query(AppSettings).filter(AppSettings.key == REGISTRATION_LOBBY_EPOCH_KEY).first()
+    if setting:
+        setting.value = str(new_epoch)
+        setting.updated_by = admin_id
+        setting.updated_at = datetime.utcnow()
+    else:
+        db.add(
+            AppSettings(
+                key=REGISTRATION_LOBBY_EPOCH_KEY,
+                value=str(new_epoch),
+                description="Increments when admin resets the registration lobby; entries use lobby_epoch to match",
+                updated_by=admin_id,
+            )
+        )
+    db.commit()
+    logger.info("Registration lobby epoch bumped %s -> %s", cur, new_epoch)
+    return new_epoch
+
+
+def get_registration_lobby_name(db: Session) -> str:
+    """Human-readable name for the current registration lobby (landing / intake)."""
+    setting = db.query(AppSettings).filter(AppSettings.key == REGISTRATION_LOBBY_NAME_KEY).first()
+    if not setting or not (setting.value or "").strip():
+        return ""
+    return setting.value.strip()
+
+
+def set_registration_lobby_name(db: Session, name: str, admin_id: Optional[str] = None) -> None:
+    cleaned = (name or "").strip()
+    setting = db.query(AppSettings).filter(AppSettings.key == REGISTRATION_LOBBY_NAME_KEY).first()
+    if setting:
+        setting.value = cleaned
+        setting.updated_by = admin_id
+        setting.updated_at = datetime.utcnow()
+    else:
+        db.add(
+            AppSettings(
+                key=REGISTRATION_LOBBY_NAME_KEY,
+                value=cleaned,
+                description="Display name for the current registration lobby (public signup)",
+                updated_by=admin_id,
+            )
+        )
+    db.commit()
+    logger.info("Registration lobby name set to: %r", cleaned or "(empty)")
+
+
+def get_target_lobby_for_next_registrant(db: Session) -> int:
+    """Lobby batch the next completed intake joins (same indexing as /api/registration-group-status)."""
+    group_size = max(1, LOBBY_GROUP_SIZE)
+    epoch = get_registration_lobby_epoch(db)
+    total = db.query(Entry).filter(
+        Entry.payment_status == "completed",
+        Entry.codm_id.isnot(None),
+        Entry.excluded == False,
+        Entry.lobby_epoch == epoch,
+    ).count()
+    return (total // group_size) + 1
+
+
+def get_sheets_tab_for_current_lobby(db: Session) -> Optional[str]:
+    """Return the admin lobby name to use as the Google Sheets tab, or None to fall back to env logic."""
+    name = get_registration_lobby_name(db)
+    return name if name else None
+
+
+def mark_entry_payment_completed(entry: Entry, db: Session) -> None:
+    """Record payment success and the registration lobby epoch at that moment (for stale-pending handling)."""
+    entry.payment_status = "completed"
+    entry.payment_completed_epoch = get_registration_lobby_epoch(db)
+
+
+def _payment_epoch_for_duplicate_checks(entry: Entry) -> int:
+    """Epoch to use when comparing pending rows to current lobby (coalesce for legacy rows)."""
+    if entry.payment_completed_epoch is not None:
+        return int(entry.payment_completed_epoch)
+    return 0
+
 
 def get_entry_fee_ngn() -> float:
     """Calculate entry fee in NGN based on $1 USD and current exchange rate"""
@@ -490,17 +642,19 @@ def check_registration_milestone(db: Session):
 
 # Routes
 @app.get("/", response_class=HTMLResponse)
-async def landing_page(request: Request):
+async def landing_page(request: Request, db: Session = Depends(get_db)):
     """Landing page with entry button"""
     entry_fee_ngn = get_entry_fee_ngn()
+    try:
+        cycle = calculate_registration_group_status(db)
+        remaining_in_group = cycle["remaining_in_group"]
+    except Exception:
+        remaining_in_group = LOBBY_GROUP_SIZE
 
     return templates.TemplateResponse("landing.html", {
         "request": request,
         "entry_fee": int(entry_fee_ngn),  # Display as integer (no decimals)
-        # Defaults until JS polling calls `/api/registration-group-status`.
-        # Avoids blocking page render on DB access.
-        "group_number": 1,
-        "remaining_in_group": LOBBY_GROUP_SIZE,
+        "remaining_in_group": remaining_in_group,
     })
 
 def initiate_paystack_payment(amount: float, email: str, reference: str) -> dict:
@@ -623,29 +777,43 @@ async def initiate_payment(
                 status_code=503, 
                 detail="Database connection error. Please try again in a moment."
             )
-        # Check if email already has a completed payment
-        existing_entry = db.query(Entry).filter(
-            Entry.contact_email == email,
-            Entry.payment_status == "completed"
-        ).first()
-        
-        if existing_entry:
-            # If intake already submitted, redirect to thank you
-            if existing_entry.codm_id:
-                return {
-                    "success": True,
-                    "already_registered": True,
-                    "message": "You have already registered for this tournament",
-                    "redirect_url": f"/thank-you/{existing_entry.payment_reference}"
-                }
-            # If payment completed but intake not submitted, redirect to intake
-            else:
+        # Pending intake for this email: always finish that flow first
+        current_epoch = get_registration_lobby_epoch(db)
+        pending_intake = (
+            db.query(Entry)
+            .filter(
+                Entry.contact_email == email,
+                Entry.payment_status == "completed",
+                Entry.codm_id.is_(None),
+            )
+            .order_by(Entry.created_at.desc())
+            .first()
+        )
+        if pending_intake:
+            pending_ep = _payment_epoch_for_duplicate_checks(pending_intake)
+            if current_epoch <= pending_ep:
                 return {
                     "success": True,
                     "payment_completed": True,
                     "message": "Payment already completed. Please complete your registration",
-                    "redirect_url": f"/intake/{existing_entry.payment_reference}"
+                    "redirect_url": f"/intake/{pending_intake.payment_reference}",
                 }
+            # Paid before a prior lobby reset; new cycle — allow a fresh checkout
+
+        already_in_open_lobby = db.query(Entry).filter(
+            Entry.contact_email == email,
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None),
+            Entry.excluded == False,
+            Entry.lobby_epoch == current_epoch,
+        ).first()
+        if already_in_open_lobby:
+            return {
+                "success": True,
+                "already_registered": True,
+                "message": "You are already registered for the current lobby. You can register again when the next lobby opens.",
+                "redirect_url": f"/thank-you/{already_in_open_lobby.payment_reference}",
+            }
         
         # Calculate entry fee in NGN based on current exchange rate
         entry_fee_ngn = get_entry_fee_ngn()
@@ -753,7 +921,7 @@ async def intake_page(
         logger.info(f"Verification result: {verification}")
         
         if verification.get("verified"):
-            entry.payment_status = "completed"
+            mark_entry_payment_completed(entry, db)
             payment = db.query(Payment).filter(Payment.reference == payment_reference).first()
             if payment:
                 payment.status = "success"
@@ -778,12 +946,16 @@ async def intake_page(
         return RedirectResponse(url=f"/thank-you/{payment_reference}", status_code=302)
     
     # Payment verified, show intake form
+    try:
+        cycle = calculate_registration_group_status(db)
+        remaining_in_group = cycle["remaining_in_group"]
+    except Exception:
+        remaining_in_group = LOBBY_GROUP_SIZE
+
     return templates.TemplateResponse("intake.html", {
         "request": request,
         "payment_reference": payment_reference,
-        # Defaults until JS polling calls `/api/registration-group-status`.
-        "group_number": 1,
-        "remaining_in_group": LOBBY_GROUP_SIZE,
+        "remaining_in_group": remaining_in_group,
     })
 
 @app.post("/api/submit-intake")
@@ -815,7 +987,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
                 verification = verify_flutterwave_payment(data.payment_reference)
             
             if verification.get("verified"):
-                entry.payment_status = "completed"
+                mark_entry_payment_completed(entry, db)
                 payment = db.query(Payment).filter(Payment.reference == data.payment_reference).first()
                 if payment:
                     payment.status = "success"
@@ -827,7 +999,45 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
         
         if entry.codm_id:
             raise HTTPException(status_code=400, detail="Intake already submitted")
-        
+
+        current_epoch = get_registration_lobby_epoch(db)
+        total_before = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None),
+            Entry.excluded == False,
+            Entry.lobby_epoch == current_epoch,
+        ).count()
+        lobby_group = (total_before // max(1, LOBBY_GROUP_SIZE)) + 1
+
+        codm_key = normalize_codm_for_match(data.codm_id)
+        phone_key = normalize_phone_digits(phone_cleaned)
+        email_key = (data.contact_email or "").strip().lower()
+
+        # Same email/phone/CODM once per registration lobby epoch (not per 100-slot batch).
+        peers = db.query(Entry).filter(
+            Entry.payment_status == "completed",
+            Entry.codm_id.isnot(None),
+            Entry.excluded == False,
+            Entry.lobby_epoch == current_epoch,
+            Entry.id != entry.id,
+        ).all()
+        for o in peers:
+            if normalize_codm_for_match(o.codm_id) == codm_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This CODM ID is already registered for the current lobby.",
+                )
+            if (o.contact_email or "").strip().lower() == email_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is already registered for the current lobby.",
+                )
+            if phone_key and normalize_phone_digits(o.contact_phone) == phone_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This phone number is already registered for the current lobby.",
+                )
+
         # Update entry with player details (use cleaned values)
         entry.codm_id = data.codm_id
         entry.contact_phone = phone_cleaned
@@ -836,6 +1046,8 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
         entry.bank_name = data.bank_name
         entry.account_number = account_cleaned
         entry.account_name = data.account_name
+        entry.lobby_group = lobby_group
+        entry.lobby_epoch = current_epoch
         db.commit()
         db.refresh(entry)  # Refresh to get updated data
         
@@ -862,11 +1074,13 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
                 "payout_status": entry.payout_status,
                 "created_at": entry.created_at,
                 "dollar_rate": dollar_rate,
-                "per_kill_value": per_kill_value
+                "per_kill_value": per_kill_value,
+                "kill_count": entry.kill_count or 0,
             }
             
-            logger.info(f"Attempting to save entry to Google Sheets: {entry.payment_reference}")
-            result = save_entry_to_sheets(entry_data)
+            sheets_tab = get_sheets_tab_for_current_lobby(db)
+            logger.info(f"Attempting to save entry to Google Sheets (tab={sheets_tab}): {entry.payment_reference}")
+            result = save_entry_to_sheets(entry_data, target_sheet=sheets_tab)
             if result:
                 logger.info(f"Successfully saved entry to Google Sheets: {entry.payment_reference}")
             else:
@@ -932,13 +1146,15 @@ async def thank_you_page(request: Request, payment_reference: str, db: Session =
     })
 
 def calculate_registration_group_status(db: Session) -> dict:
-    """Compute current lobby group + remaining spots until the next reset."""
+    """Compute current lobby group + remaining spots until the next reset (current admin lobby epoch only)."""
     group_size = max(1, LOBBY_GROUP_SIZE)
+    epoch = get_registration_lobby_epoch(db)
 
     total_registrations = db.query(Entry).filter(
         Entry.payment_status == "completed",
         Entry.codm_id.isnot(None),
         Entry.excluded == False,
+        Entry.lobby_epoch == epoch,
     ).count()
 
     group_number = (total_registrations // group_size) + 1
@@ -954,6 +1170,8 @@ def calculate_registration_group_status(db: Session) -> dict:
         "group_number": group_number,
         "within_group_count": within_group_count,
         "remaining_in_group": remaining_in_group,
+        "registration_lobby_epoch": epoch,
+        "registration_lobby_name": get_registration_lobby_name(db),
     }
 
 
@@ -962,8 +1180,10 @@ async def registration_group_status(db: Session = Depends(get_db)):
     """
     Public endpoint for the countdown.
 
-    Groups reset every `LOBBY_GROUP_SIZE` registrations.
-    Group number is 1-based: group 1 starts from 0 -> 99 registrations.
+    Counts only the current admin registration lobby epoch. Admins can bump the epoch
+    to reset the countdown without waiting for `LOBBY_GROUP_SIZE` registrations.
+
+    Within an epoch, groups advance every `LOBBY_GROUP_SIZE` registrations.
     """
     status = calculate_registration_group_status(db)
     return {
@@ -1053,6 +1273,8 @@ async def admin_dashboard(
         RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
         RegistrationMilestone.notified == True
     ).first()
+
+    cycle = calculate_registration_group_status(db)
     
     stats = {
         "total_entries": len(entries),
@@ -1064,7 +1286,12 @@ async def admin_dashboard(
         "cod_lobby_link": cod_lobby_link,
         "tournament_status": tournament_status,
         "milestone_threshold": REGISTRATION_MILESTONE,
-        "milestone_reached": milestone is not None
+        "milestone_reached": milestone is not None,
+        "registration_lobby_epoch": cycle["registration_lobby_epoch"],
+        "registration_lobby_name": cycle["registration_lobby_name"],
+        "current_cycle_registrations": cycle["total_registrations"],
+        "current_cycle_group_number": cycle["group_number"],
+        "current_cycle_remaining_in_group": cycle["remaining_in_group"],
     }
     
     return templates.TemplateResponse("admin_dashboard.html", {
@@ -1266,8 +1493,8 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
             entry = db.query(Entry).filter(Entry.payment_reference == reference).first()
             if entry:
                 if entry.payment_status != "completed":
-                    entry.payment_status = "completed"
-                    
+                    mark_entry_payment_completed(entry, db)
+
                     # Update payment record
                     payment = db.query(Payment).filter(Payment.reference == reference).first()
                     if payment:
@@ -1280,13 +1507,14 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
                     
                     # Update Google Sheets
                     try:
-                        # Pass codm_id or email to find the row in the sheet
                         updates = {"payment_status": "completed"}
                         if entry.codm_id:
                             updates["codm_id"] = entry.codm_id
+                        if entry.contact_phone:
+                            updates["contact_phone"] = entry.contact_phone
                         elif entry.contact_email:
                             updates["contact_email"] = entry.contact_email
-                        update_entry_in_sheets(reference, updates)
+                        update_entry_in_sheets(reference, updates, target_sheet=get_sheets_tab_for_current_lobby(db))
                     except Exception as e:
                         logger.warning(f"Failed to update Google Sheets: {e}")
                 else:
@@ -1329,6 +1557,19 @@ class RemovePlayerRequest(BaseModel):
 class RemoveAdminUserRequest(BaseModel):
     admin_user_id: str = Field(..., description="Admin user id to deactivate/remove")
 
+
+class ResetRegistrationLobbyRequest(BaseModel):
+    lobby_name: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="Optional display name for the new cycle; default Lobby {epoch} if omitted or blank",
+    )
+
+
+class SetRegistrationLobbyNameRequest(BaseModel):
+    lobby_name: str = Field(default="", max_length=200, description="Shown on public signup; empty hides the name line")
+
+
 @app.get("/api/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     """Get admin statistics including registration count"""
@@ -1361,6 +1602,8 @@ async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depe
             RegistrationMilestone.milestone_count == REGISTRATION_MILESTONE,
             RegistrationMilestone.notified == True
         ).first()
+
+        cycle = calculate_registration_group_status(db)
         
         return {
             "success": True,
@@ -1374,7 +1617,12 @@ async def get_admin_stats(db: Session = Depends(get_db), admin: AdminUser = Depe
                 "tournament_status": tournament_status,
                 "milestone_threshold": REGISTRATION_MILESTONE,
                 "milestone_reached": milestone is not None,
-                "milestone_notified_at": milestone.notification_sent_at.isoformat() if milestone else None
+                "milestone_notified_at": milestone.notification_sent_at.isoformat() if milestone else None,
+                "registration_lobby_epoch": cycle["registration_lobby_epoch"],
+                "registration_lobby_name": cycle["registration_lobby_name"],
+                "current_cycle_registrations": cycle["total_registrations"],
+                "current_cycle_group_number": cycle["group_number"],
+                "current_cycle_remaining_in_group": cycle["remaining_in_group"],
             }
         }
     except Exception as e:
@@ -1437,6 +1685,53 @@ async def update_tournament_status(
         logger.error(f"Error updating tournament status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/api/admin/reset-registration-lobby")
+async def reset_registration_lobby(
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+    data: ResetRegistrationLobbyRequest = Body(default_factory=ResetRegistrationLobbyRequest),
+):
+    """
+    Open a new registration lobby cycle: public countdown and per-lobby duplicate rules
+    apply only to entries recorded from now on (same email/CODM/phone can register again).
+    """
+    try:
+        new_epoch = bump_registration_lobby_epoch(db, admin.id)
+        raw = (data.lobby_name or "").strip()
+        display_name = raw if raw else f"Lobby {new_epoch}"
+        set_registration_lobby_name(db, display_name, admin.id)
+        cycle = calculate_registration_group_status(db)
+        return {
+            "success": True,
+            "message": "New registration lobby cycle started.",
+            "registration_lobby_epoch": new_epoch,
+            "registration_lobby_name": cycle["registration_lobby_name"],
+            "current_cycle_registrations": cycle["total_registrations"],
+            "current_cycle_group_number": cycle["group_number"],
+            "current_cycle_remaining_in_group": cycle["remaining_in_group"],
+        }
+    except Exception as e:
+        logger.error(f"Error resetting registration lobby: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/set-registration-lobby-name")
+async def set_registration_lobby_name_route(
+    data: SetRegistrationLobbyNameRequest,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Update the public display name for the current registration lobby (no cycle reset)."""
+    try:
+        set_registration_lobby_name(db, data.lobby_name, admin.id)
+        name = get_registration_lobby_name(db)
+        return {"success": True, "message": "Lobby name updated", "registration_lobby_name": name}
+    except Exception as e:
+        logger.error(f"Error setting registration lobby name: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/admin/update-kill-count")
 async def update_kill_count(
     data: UpdateKillCountRequest,
@@ -1453,11 +1748,18 @@ async def update_kill_count(
         db.refresh(entry)
         # Sync to Google Sheets
         try:
+            per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
+            dollar_rate = get_live_dollar_rate()
+            kc = data.kill_count or 0
+            payout_ngn = kc * per_kill_value * dollar_rate
+            entry_fee = float(entry.entry_fee) if entry.entry_fee else 0
+            payout_str = f"₦{payout_ngn:,.2f}" if kc else f"₦{entry_fee:,.2f}"
             update_entry_in_sheets(entry.payment_reference, {
                 "codm_id": entry.codm_id,
-                "contact_email": entry.contact_email,
-                "kill": data.kill_count
-            })
+                "contact_phone": entry.contact_phone or "",
+                "kill": data.kill_count,
+                "payout": payout_str,
+            }, target_sheet=get_sheets_tab_for_current_lobby(db))
         except Exception as e:
             logger.warning(f"Failed to sync kill count to Google Sheets: {e}")
         return {"success": True, "message": "Kill count updated", "entry_id": entry.id, "kill_count": data.kill_count}
@@ -1513,26 +1815,32 @@ async def export_csv(db: Session = Depends(get_db), admin: AdminUser = Depends(g
         per_kill_value = float(os.getenv("PER_KILL_VALUE", "0.6"))
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Time", "Gamer ID Name", "Gamer Email", "Whatsapp Number", "Region", "Kill", "Per kill Value", "Money", "Dollar Rate", "Naira Amount", "", "Bank Name", "Bank Account Number", "Paid"])
+        writer.writerow([
+            "Time",
+            "Gamer ID Name",
+            "Number",
+            "Region",
+            "Bank Name",
+            "Bank Account Number",
+            "Kill",
+            "Payout",
+            "Paid",
+        ])
         for e in entries:
             entry_fee = float(e.entry_fee) if e.entry_fee else 0
             kill_count = e.kill_count or 0
             payout_ngn = kill_count * per_kill_value * dollar_rate
+            payout_str = f"₦{payout_ngn:,.2f}" if kill_count else f"₦{entry_fee:,.2f}"
             writer.writerow([
                 e.created_at.strftime("%I:%M %p") if e.created_at else "",
                 e.codm_id or "",
-                e.contact_email or "",
                 e.contact_phone or "",
                 e.region or "",
-                kill_count,
-                per_kill_value,
-                f"${entry_fee / dollar_rate:.2f}" if dollar_rate else "$0",
-                dollar_rate,
-                f"₦{payout_ngn:,.2f}" if kill_count else f"₦{entry_fee:,.2f}",
-                "",
                 e.bank_name or "",
                 e.account_number or "",
-                "Yes" if e.payout_status == "completed" else ""
+                kill_count,
+                payout_str,
+                "Yes" if e.payout_status == "completed" else "",
             ])
         output.seek(0)
         return StreamingResponse(
@@ -1573,7 +1881,11 @@ async def bulk_payout(db: Session = Depends(get_db), admin: AdminUser = Depends(
                 db.commit()
                 processed += 1
                 try:
-                    update_entry_in_sheets(entry.payment_reference, {"codm_id": entry.codm_id, "contact_email": entry.contact_email, "payment_status": "completed"})
+                    update_entry_in_sheets(entry.payment_reference, {
+                        "codm_id": entry.codm_id,
+                        "contact_phone": entry.contact_phone or "",
+                        "payment_status": "completed",
+                    }, target_sheet=get_sheets_tab_for_current_lobby(db))
                 except Exception:
                     pass
             except Exception as e:

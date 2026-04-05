@@ -4,17 +4,32 @@ document.addEventListener('DOMContentLoaded', function() {
     const errorMsg = document.getElementById('errorMsg');
     const successMsg = document.getElementById('successMsg');
 
-    const groupNumberEl = document.getElementById('group-number');
     const groupRemainingEl = document.getElementById('group-remaining');
+    const spotsRestEl = document.getElementById('spots-rest');
+
+    function applySpotsRemaining(raw) {
+        const num = Math.max(0, Number(raw));
+        if (!Number.isFinite(num)) return;
+        if (groupRemainingEl) groupRemainingEl.textContent = String(num);
+        if (spotsRestEl) {
+            spotsRestEl.textContent =
+                (num === 1 ? ' spot' : ' spots') + ' left for the current lobby';
+        }
+    }
 
     async function updateGroupCountdown() {
-        if (!groupNumberEl || !groupRemainingEl) return;
+        if (!groupRemainingEl) return;
         try {
-            const res = await fetch('/api/registration-group-status');
+            const res = await fetch('/api/registration-group-status', {
+                method: 'GET',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) return;
             const data = await res.json();
-            if (data && data.success) {
-                groupNumberEl.textContent = data.group_number;
-                groupRemainingEl.textContent = data.remaining_in_group;
+            if (data && data.success && data.remaining_in_group != null) {
+                applySpotsRemaining(data.remaining_in_group);
             }
         } catch (e) {
             console.error('Failed to fetch group countdown:', e);
@@ -22,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     updateGroupCountdown();
-    setInterval(updateGroupCountdown, 15000);
+    setInterval(updateGroupCountdown, 8000);
 
     window.addEventListener('pageshow', function(e) {
         if (e && e.persisted) {

@@ -1,5 +1,11 @@
 """
-Google Sheets integration for saving user data
+Google Sheets integration for saving user data.
+
+Tab routing: the caller (main.py) passes the current admin lobby name as
+``target_sheet``.  When provided the entry is written directly to that tab
+(creating it + header if it doesn't exist yet).  The old env-based rotation
+(``GOOGLE_SHEET_NAME`` / ``MAX_ENTRIES_PER_SHEET``) is used only as a
+fallback when no explicit name is given.
 """
 import os
 import logging
@@ -14,9 +20,8 @@ GOOGLE_SHEETS_ENABLED = os.getenv("GOOGLE_SHEETS_ENABLED", "false").lower() == "
 SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID", "")
 SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Entries")
 CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
-# Support for base64 encoded credentials in environment variable (for Railway)
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")  # Base64 encoded credentials
-MAX_ENTRIES_PER_SHEET = int(os.getenv("MAX_ENTRIES_PER_SHEET", "100"))  # Create new sheet after this many entries
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+MAX_ENTRIES_PER_SHEET = int(os.getenv("MAX_ENTRIES_PER_SHEET", "100"))
 
 
 def _parse_lobby_sheet_name(sheet_name: str) -> Optional[tuple[str, int]]:
@@ -142,18 +147,13 @@ try:
                 headers = [
                     "Time",
                     "Gamer ID Name",
-                    "Gamer Email",
-                    "Whatsapp Number",
+                    "Number",
                     "Region",
-                    "Kill",
-                    "Per kill Value",
-                    "Money",
-                    "Dollar Rate",
-                    "Naira Amount",
-                    "",  # Empty column
                     "Bank Name",
                     "Bank Account Number",
-                    "Paid"
+                    "Kill",
+                    "Payout",
+                    "Paid",
                 ]
                 
                 service.spreadsheets().values().update(
@@ -179,7 +179,7 @@ try:
             # Get all data from the sheet
             result = service.spreadsheets().values().get(
                 spreadsheetId=spreadsheet_id,
-                range=f"{sheet_name}!A:N"
+                range=f"{sheet_name}!A:I"
             ).execute()
             
             rows = result.get('values', [])
@@ -378,12 +378,34 @@ try:
             logger.error(f"Error getting active sheet: {e}")
             return SHEET_NAME
     
-    def save_entry_to_sheets(entry_data: Dict) -> bool:
+    def ensure_sheet_tab(service, spreadsheet_id: str, tab_name: str) -> bool:
+        """Create the named tab if it doesn't exist yet, then ensure the header row."""
+        try:
+            spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            existing = {
+                (s.get("properties", {}).get("title", "") or "")
+                for s in spreadsheet.get("sheets", [])
+            }
+            if tab_name not in existing:
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id,
+                    body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+                ).execute()
+                logger.info("Created new sheet tab: %s", tab_name)
+            ensure_header_row(spreadsheet_id, tab_name)
+            return True
+        except Exception as e:
+            logger.error("Error ensuring sheet tab '%s': %s", tab_name, e)
+            return False
+
+    def save_entry_to_sheets(entry_data: Dict, target_sheet: Optional[str] = None) -> bool:
         """
-        Save entry data to Google Sheets
-        
+        Save entry data to Google Sheets.
+
         Args:
-            entry_data: Dictionary containing entry information
+            entry_data: Dictionary containing entry information.
+            target_sheet: Explicit tab name from admin lobby name.
+                          Falls back to the old auto-rotation logic when empty/None.
         
         Returns:
             bool: True if successful, False otherwise
@@ -404,55 +426,44 @@ try:
             return False
         
         try:
-            # Check if we need to create a new sheet (after 100 entries)
-            current_sheet = get_active_sheet_name()
+            if target_sheet and target_sheet.strip():
+                current_sheet = target_sheet.strip()
+                ensure_sheet_tab(service, SPREADSHEET_ID, current_sheet)
+            else:
+                current_sheet = get_active_sheet_name()
             
             # Ensure header row exists
             ensure_header_row(SPREADSHEET_ID, current_sheet)
             
-            # Prepare row data matching CSV structure
-            # Columns: Time, Gamer ID Name, Gamer Email, Whatsapp Number, Region, 
-            #          Kill, Per kill Value, Money, Dollar Rate, Naira Amount, 
-            #          (empty), Bank Name, Bank Account Number, Paid
-            
-            # Format time as "8:00 AM" style (or current time)
+            # Client sheet layout: Time, Gamer ID Name, Number, Region, Bank Name,
+            # Bank Account Number, Kill, Payout, Paid
             entry_time = datetime.now().strftime("%I:%M %p")
-            
-            # Get entry fee in NGN
-            entry_fee_ngn = entry_data.get("entry_fee", 0) or 0
-            
-            # Calculate dollar amount (assuming dollar rate from entry_data or default 1500)
-            dollar_rate = entry_data.get("dollar_rate", 1500)
-            entry_fee_usd = float(entry_fee_ngn) / float(dollar_rate) if dollar_rate > 0 else 0
-            
-            # Format Naira amount with currency symbol
-            naira_amount_str = f"₦{float(entry_fee_ngn):,.2f}" if entry_fee_ngn else "₦0.00"
-            
-            # Payment status for "Paid" column
+            entry_fee_ngn = float(entry_data.get("entry_fee", 0) or 0)
+            dollar_rate = float(entry_data.get("dollar_rate", 1500) or 1500)
+            per_kill = float(entry_data.get("per_kill_value", 0.6) or 0.6)
+            kill_count = int(entry_data.get("kill_count", 0) or 0)
+            payout_ngn = kill_count * per_kill * dollar_rate
+            payout_str = (
+                f"₦{payout_ngn:,.2f}" if kill_count else f"₦{entry_fee_ngn:,.2f}"
+            )
             paid_status = "Yes" if entry_data.get("payment_status") == "completed" else ""
-            
             row = [
-                entry_time,  # Time
-                entry_data.get("codm_id", ""),  # Gamer ID Name
-                entry_data.get("contact_email", ""),  # Gamer Email
-                entry_data.get("contact_phone", ""),  # Whatsapp Number
-                entry_data.get("region", ""),  # Region (may not be in entry_data)
-                "",  # Kill (to be filled later)
-                entry_data.get("per_kill_value", 0.6),  # Per kill Value (default 0.6)
-                f"${entry_fee_usd:.2f}",  # Money (USD)
-                str(dollar_rate),  # Dollar Rate
-                naira_amount_str,  # Naira Amount (formatted)
-                "",  # Empty column
-                entry_data.get("bank_name", ""),  # Bank Name
-                entry_data.get("account_number", ""),  # Bank Account Number
-                paid_status  # Paid
+                entry_time,
+                entry_data.get("codm_id", ""),
+                entry_data.get("contact_phone", ""),
+                entry_data.get("region", ""),
+                entry_data.get("bank_name", ""),
+                entry_data.get("account_number", ""),
+                kill_count,
+                payout_str,
+                paid_status,
             ]
             
             # Find the last row with data to append right after it
             # Get all data in the sheet to find the true last row
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{current_sheet}!A:N"
+                range=f"{current_sheet}!A:I"
             ).execute()
             
             existing_rows = result.get('values', [])
@@ -491,13 +502,14 @@ try:
             logger.error(f"Unexpected error saving to Google Sheets: {e}")
             return False
     
-    def update_entry_in_sheets(payment_reference: str, updates: Dict) -> bool:
+    def update_entry_in_sheets(payment_reference: str, updates: Dict, target_sheet: Optional[str] = None) -> bool:
         """
-        Update an existing entry in Google Sheets
-        
+        Update an existing entry in Google Sheets.
+
         Args:
-            payment_reference: Payment reference to find the row
-            updates: Dictionary of fields to update
+            payment_reference: Payment reference to find the row.
+            updates: Dictionary of fields to update.
+            target_sheet: Explicit tab name; falls back to auto-rotation when empty.
         
         Returns:
             bool: True if successful, False otherwise
@@ -510,33 +522,39 @@ try:
             return False
         
         try:
-            # Get current active sheet name
-            current_sheet = get_active_sheet_name()
+            if target_sheet and target_sheet.strip():
+                current_sheet = target_sheet.strip()
+            else:
+                current_sheet = get_active_sheet_name()
             
-            # Find the row with matching CODM ID (Gamer ID Name) in column B
-            # Since payment_reference might not be in the sheet, we'll search by CODM ID or email
+            # Match row by Gamer ID (B) or Number (C — phone; legacy sheets may have email in C)
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{current_sheet}!B:C"  # Columns B (Gamer ID Name) and C (Gamer Email)
+                range=f"{current_sheet}!B:C",
             ).execute()
             
             values = result.get('values', [])
             row_index = None
             
-            # Search by CODM ID first, then by email
             search_codm_id = updates.get("codm_id", "")
+            search_phone = updates.get("contact_phone", "")
             search_email = updates.get("contact_email", "")
             
-            # Remove search fields from updates to avoid trying to update them
-            search_updates = {k: v for k, v in updates.items() 
-                            if k not in ["codm_id", "contact_email"]}
+            search_updates = {
+                k: v
+                for k, v in updates.items()
+                if k not in ["codm_id", "contact_phone", "contact_email"]
+            }
             
             for idx, row in enumerate(values, start=1):
-                if row and len(row) >= 2:
-                    if (search_codm_id and row[0] == search_codm_id) or \
-                       (search_email and len(row) > 1 and row[1] == search_email):
-                        row_index = idx + 1  # +1 for header row, +1 for 1-based indexing
-                        break
+                if not row:
+                    continue
+                second = row[1] if len(row) > 1 else ""
+                if (search_codm_id and row[0] == search_codm_id) or (
+                    search_phone and second == search_phone
+                ) or (search_email and second == search_email):
+                    row_index = idx + 1
+                    break
             
             if row_index is None:
                 logger.warning(f"Entry not found in sheet: payment_reference={payment_reference}, codm_id={search_codm_id}, email={search_email}")
@@ -545,20 +563,17 @@ try:
             # Use search_updates instead of updates for the actual update
             updates = search_updates
             
-            # Update specific columns based on updates dict
-            # Column mapping: A=Time, B=Gamer ID Name, C=Gamer Email, D=Whatsapp Number, 
-            #                 E=Region, F=Kill, G=Per kill Value, H=Money, I=Dollar Rate,
-            #                 J=Naira Amount, K=(empty), L=Bank Name, M=Bank Account Number, N=Paid
+            # A=Time, B=Gamer ID Name, C=Number, D=Region, E=Bank Name, F=Bank Account,
+            # G=Kill, H=Payout, I=Paid
             column_map = {
                 "codm_id": "B",
-                "contact_email": "C",
-                "contact_phone": "D",
-                "region": "E",
-                "kill": "F",
-                "per_kill_value": "G",
-                "bank_name": "L",
-                "account_number": "M",
-                "payment_status": "N"  # Paid column
+                "contact_phone": "C",
+                "region": "D",
+                "bank_name": "E",
+                "account_number": "F",
+                "kill": "G",
+                "payout": "H",
+                "payment_status": "I",
             }
             
             update_requests = []
@@ -568,18 +583,8 @@ try:
                     # Format payment_status for Paid column
                     if field == "payment_status":
                         value = "Yes" if value == "completed" else ""
-                    # Format per_kill_value and kill as numbers
-                    elif field in ["per_kill_value", "kill"]:
-                        value = str(value) if value else ""
-                    # Format money if dollar amount is being updated
-                    elif field == "money" and "entry_fee" in updates:
-                        dollar_rate = updates.get("dollar_rate", 1500)
-                        entry_fee_ngn = updates.get("entry_fee", 0)
-                        value = f"${float(entry_fee_ngn) / float(dollar_rate):.2f}" if dollar_rate > 0 else "$0.00"
-                    # Format naira amount if entry_fee is being updated
-                    elif field == "naira_amount" and "entry_fee" in updates:
-                        entry_fee_ngn = updates.get("entry_fee", 0)
-                        value = f"₦{float(entry_fee_ngn):,.2f}" if entry_fee_ngn else "₦0.00"
+                    elif field == "kill":
+                        value = str(value) if value is not None and value != "" else ""
                     
                     update_requests.append({
                         "range": f"{current_sheet}!{column}{row_index}",
@@ -616,9 +621,9 @@ except ImportError:
     def get_active_sheet_name() -> str:
         return SHEET_NAME
     
-    def save_entry_to_sheets(entry_data: Dict) -> bool:
+    def save_entry_to_sheets(entry_data: Dict, target_sheet: Optional[str] = None) -> bool:
         return False
     
-    def update_entry_in_sheets(payment_reference: str, updates: Dict) -> bool:
+    def update_entry_in_sheets(payment_reference: str, updates: Dict, target_sheet: Optional[str] = None) -> bool:
         return False
 

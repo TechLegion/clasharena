@@ -15,14 +15,9 @@
             <h1>Player Registration</h1>
             <p class="subtitle">Complete your tournament entry</p>
 
-            <div class="group-countdown" id="group-countdown">
-                <div class="group-countdown-label">Lobby Registration Slots</div>
-                <div class="group-countdown-main">
-                    Lobby <strong id="group-number">{{ group_number }}</strong>
-                    <span class="group-countdown-sep">•</span>
-                    <strong id="group-remaining">{{ remaining_in_group }}</strong> spots left
-                </div>
-            </div>
+            <p class="intake-slots" id="group-countdown" aria-live="polite">
+                <span id="group-remaining" class="spots-num">{{ remaining_in_group }}</span><span id="spots-rest" class="spots-rest">{% if remaining_in_group == 1 %} spot{% else %} spots{% endif %} left for the current lobby</span>
+            </p>
 
             <form id="intakeForm">
                 <input type="hidden" id="paymentReference" value="{{ payment_reference }}">
@@ -78,7 +73,7 @@
             </form>
         </div>
     </div>
-    <script src="/static/js/intake.js"></script>
+    <script src="/static/js/intake.js?v=6"></script>
 </body>
 </html>
 

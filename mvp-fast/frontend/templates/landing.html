@@ -52,30 +52,14 @@
                 </div>
             </div>
             
-            <!-- Entry Info Card -->
-            <div class="entry-card">
-                <div class="entry-badge">
-                    <div class="badge-dot"></div>
-                    <span>Tournament Entry</span>
-                </div>
-                <div class="entry-fee-display">
-                    <span class="currency">₦</span>
-                    <span class="amount">{{ entry_fee }}</span>
-                </div>
-                <p class="entry-description">$1 USD Equivalent • Win Big Prizes</p>
+            <div class="entry-fee">
+                <p class="entry-fee-label">Entry fee</p>
+                <p class="entry-fee-amount"><span class="entry-fee-currency">₦</span>{{ entry_fee }}</p>
             </div>
-            
-            <!-- Entry Form -->
-            <div class="lobby-slot-section">
-                <div class="group-countdown" id="group-countdown">
-                    <div class="group-countdown-label">Lobby Registration Slots</div>
-                    <div class="group-countdown-main">
-                        Lobby <strong id="group-number">{{ group_number }}</strong>
-                        <span class="group-countdown-sep">•</span>
-                        <strong id="group-remaining">{{ remaining_in_group }}</strong> spots left
-                    </div>
-                </div>
-            </div>
+
+            <p class="spots-left" id="group-countdown" aria-live="polite">
+                <span id="group-remaining" class="spots-num">{{ remaining_in_group }}</span><span id="spots-rest" class="spots-rest">{% if remaining_in_group == 1 %} spot{% else %} spots{% endif %} left for the current lobby</span>
+            </p>
 
             <form id="entryForm" class="entry-form">
                 <div class="form-group">
@@ -101,35 +85,10 @@
                 <div id="errorMsg" class="error-message" style="display: none;"></div>
             </form>
             
-            <!-- Trust Indicators -->
-            <div class="trust-indicators">
-                <p class="trust-text">Trusted by thousands of players</p>
-                <div class="trust-badges">
-                    <div class="trust-badge">
-                        <span>Paystack</span>
-                    </div>
-                    <div class="trust-badge">
-                        <span>SSL Secured</span>
-                    </div>
-                </div>
-                <div class="security-features">
-                    <div class="security-item">
-                        <div class="security-dot green"></div>
-                        <span>Instant Withdrawals</span>
-                    </div>
-                    <div class="security-item">
-                        <div class="security-dot blue"></div>
-                        <span>Licensed & Regulated</span>
-                    </div>
-                    <div class="security-item">
-                        <div class="security-dot orange"></div>
-                        <span>PCI Compliant</span>
-                    </div>
-                </div>
-            </div>
+            <p class="trust-line">Secured by Paystack · Instant withdrawals</p>
         </div>
     </div>
     
-    <script src="/static/js/landing.js"></script>
+    <script src="/static/js/landing.js?v=6"></script>
 </body>
 </html>

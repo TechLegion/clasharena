@@ -83,6 +83,22 @@
                 <div class="admin-divider"></div>
 
                 <div class="admin-field">
+                    <label class="admin-field-label">Registration lobby cycle</label>
+                    <p class="admin-field-hint">Name appears on the public signup and intake pages. Save name updates the label only. Open next lobby starts a new cycle and uses the name in the field, or a default such as Lobby 3 if the field is blank.</p>
+                    <p class="admin-field-meta">Name: <strong id="registration-lobby-name-display">{% if stats.registration_lobby_name %}{{ stats.registration_lobby_name }}{% else %}—{% endif %}</strong> · Cycle: <strong id="registration-lobby-epoch">{{ stats.registration_lobby_epoch }}</strong> · This cycle: <strong id="current-cycle-registrations">{{ stats.current_cycle_registrations }}</strong> full registrations · Group <span id="current-cycle-group">{{ stats.current_cycle_group_number }}</span> · <span id="current-cycle-remaining">{{ stats.current_cycle_remaining_in_group }}</span> slots left in this group</p>
+                    <label class="admin-field-label" for="registration-lobby-name-input">Lobby display name</label>
+                    <div class="admin-field-row">
+                        <input type="text" id="registration-lobby-name-input" class="admin-input" value="{{ stats.registration_lobby_name|e }}" maxlength="200" placeholder="e.g. 8am to 9am" autocomplete="off">
+                        <button type="button" class="admin-btn admin-btn-primary" onclick="saveRegistrationLobbyName()">Save name</button>
+                    </div>
+                    <div id="lobby-name-message" class="admin-msg"></div>
+                    <button type="button" class="admin-btn admin-btn-secondary" onclick="resetRegistrationLobby()" style="margin-top: 12px;">Open next registration lobby</button>
+                    <div id="reset-lobby-message" class="admin-msg"></div>
+                </div>
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
                     <label class="admin-field-label">Lobby Cross-Check</label>
                     <p class="admin-field-hint">Paste CODM IDs from the lobby, one per line</p>
                     <textarea id="lobby-ids-input" class="admin-input admin-textarea" rows="4" placeholder="Player1&#10;Player2&#10;Player3"></textarea>

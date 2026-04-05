@@ -29,6 +29,12 @@ class Entry(Base):
     email_notified = Column(Boolean, default=False)
     sms_notified = Column(Boolean, default=False)
     match_time_notified = Column(Boolean, default=False)
+    # 1-based lobby batch (every LOBBY_GROUP_SIZE full registrations advance the lobby). Set when intake completes.
+    lobby_group = Column(Integer, nullable=True, index=True)
+    # Admin "reset lobby" cycle; only rows in the current epoch count for slots / duplicates / public countdown.
+    lobby_epoch = Column(Integer, nullable=False, default=0, index=True)
+    # Registration lobby epoch when payment completed (intake may finish later). Used to release stale pending intakes after admin opens a new lobby.
+    payment_completed_epoch = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

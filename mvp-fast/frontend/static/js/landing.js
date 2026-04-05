@@ -4,30 +4,46 @@ document.addEventListener('DOMContentLoaded', function() {
     const loading = document.getElementById('loading');
     const errorMsg = document.getElementById('errorMsg');
     const emailInput = document.getElementById('email');
-    const groupNumberEl = document.getElementById('group-number');
     const groupRemainingEl = document.getElementById('group-remaining');
+    const spotsRestEl = document.getElementById('spots-rest');
+
+    function applySpotsRemaining(raw) {
+        const num = Math.max(0, Number(raw));
+        if (!Number.isFinite(num)) return;
+        if (groupRemainingEl) groupRemainingEl.textContent = String(num);
+        if (spotsRestEl) {
+            spotsRestEl.textContent =
+                (num === 1 ? ' spot' : ' spots') + ' left for the current lobby';
+        }
+    }
 
     async function updateGroupCountdown() {
-        // If the page doesn't include the countdown (defensive), just skip.
-        if (!groupNumberEl || !groupRemainingEl) return;
+        if (!groupRemainingEl) return;
 
         try {
-            const res = await fetch('/api/registration-group-status');
+            const res = await fetch('/api/registration-group-status', {
+                method: 'GET',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) {
+                console.error('registration-group-status HTTP', res.status);
+                return;
+            }
             const data = await res.json();
 
-            if (data && data.success) {
-                groupNumberEl.textContent = data.group_number;
-                groupRemainingEl.textContent = data.remaining_in_group;
+            if (data && data.success && data.remaining_in_group != null) {
+                applySpotsRemaining(data.remaining_in_group);
             }
         } catch (e) {
-            // Fail silently; countdown is informational only.
             console.error('Failed to fetch group countdown:', e);
         }
     }
 
-    // Update immediately, then poll.
+    // Update immediately, then poll (was 15s; faster refresh feels live).
     updateGroupCountdown();
-    setInterval(updateGroupCountdown, 15000);
+    setInterval(updateGroupCountdown, 8000);
 
     // Handle BFCache/back-navigation: the page might not reload,
     // so we re-fetch the countdown when the page is shown again.

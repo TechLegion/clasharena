@@ -99,6 +99,85 @@ async function updateKillCount(entryId, killCount) {
     }
 }
 
+function syncRegistrationLobbyNameUI(name) {
+    const input = document.getElementById('registration-lobby-name-input');
+    const disp = document.getElementById('registration-lobby-name-display');
+    const v = name != null && name !== undefined ? String(name) : '';
+    if (input) input.value = v;
+    if (disp) disp.textContent = v.trim() ? v : '—';
+}
+
+async function saveRegistrationLobbyName() {
+    const input = document.getElementById('registration-lobby-name-input');
+    const messageDiv = document.getElementById('lobby-name-message');
+    const lobby_name = input ? input.value.trim() : '';
+    try {
+        messageDiv.innerHTML = '<span class="admin-msg-success">Saving...</span>';
+        const response = await fetch('/api/admin/set-registration-lobby-name', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lobby_name: lobby_name }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || data.message || response.status) + '</span>';
+            return;
+        }
+        if (data.success) {
+            syncRegistrationLobbyNameUI(data.registration_lobby_name);
+            messageDiv.innerHTML = '<span class="admin-msg-success">✓ Saved</span>';
+            setTimeout(() => { messageDiv.innerHTML = ''; }, 3000);
+        } else {
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed</span>';
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        messageDiv.innerHTML = '<span class="admin-msg-error">Request failed</span>';
+    }
+}
+
+async function resetRegistrationLobby() {
+    if (!confirm('Open the next registration lobby? The public countdown will reset and players can sign up again for this new cycle. This does not delete existing entries.')) {
+        return;
+    }
+    const messageDiv = document.getElementById('reset-lobby-message');
+    const nameInput = document.getElementById('registration-lobby-name-input');
+    const lobbyName = nameInput ? nameInput.value.trim() : '';
+    try {
+        messageDiv.innerHTML = '<span class="admin-msg-success">Updating...</span>';
+        const response = await fetch('/api/admin/reset-registration-lobby', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(lobbyName ? { lobby_name: lobbyName } : {}),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || data.message || response.status) + '</span>';
+            return;
+        }
+        if (data.success) {
+            messageDiv.innerHTML = '<span class="admin-msg-success">✓ ' + (data.message || 'Lobby cycle updated') + '</span>';
+            const epochEl = document.getElementById('registration-lobby-epoch');
+            const regEl = document.getElementById('current-cycle-registrations');
+            const groupEl = document.getElementById('current-cycle-group');
+            const remEl = document.getElementById('current-cycle-remaining');
+            if (epochEl) epochEl.textContent = data.registration_lobby_epoch;
+            if (regEl) regEl.textContent = data.current_cycle_registrations;
+            if (groupEl) groupEl.textContent = data.current_cycle_group_number;
+            if (remEl) remEl.textContent = data.current_cycle_remaining_in_group;
+            if (data.registration_lobby_name !== undefined) {
+                syncRegistrationLobbyNameUI(data.registration_lobby_name);
+            }
+            setTimeout(() => { messageDiv.innerHTML = ''; }, 5000);
+        } else {
+            messageDiv.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || data.message || 'Unknown error') + '</span>';
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        messageDiv.innerHTML = '<span class="admin-msg-error">Request failed</span>';
+    }
+}
+
 async function updateCodLobbyLink() {
     const input = document.getElementById('cod-lobby-link-input');
     const messageDiv = document.getElementById('cod-lobby-message');
