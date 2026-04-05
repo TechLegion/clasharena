@@ -49,11 +49,16 @@ logger = logging.getLogger(__name__)
 
 # Import Google Sheets integration (optional)
 try:
-    from google_sheets import save_entry_to_sheets, update_entry_in_sheets
+    from google_sheets import (
+        save_entry_to_sheets,
+        update_entry_in_sheets,
+        get_sheet_data_row_count_cached,
+    )
 except ImportError:
     logger.warning("Google Sheets integration not available. Install google-api-python-client and google-auth to enable.")
     def save_entry_to_sheets(entry_data, target_sheet=None): return False
     def update_entry_in_sheets(payment_reference, updates, target_sheet=None): return False
+    def get_sheet_data_row_count_cached(tab_name=None): return None
 
 # Import exchange rate module
 try:
@@ -1150,12 +1155,19 @@ def calculate_registration_group_status(db: Session) -> dict:
     group_size = max(1, LOBBY_GROUP_SIZE)
     epoch = get_registration_lobby_epoch(db)
 
-    total_registrations = db.query(Entry).filter(
+    total_registrations_db = db.query(Entry).filter(
         Entry.payment_status == "completed",
         Entry.codm_id.isnot(None),
         Entry.excluded == False,
         Entry.lobby_epoch == epoch,
     ).count()
+
+    sheet_tab = get_sheets_tab_for_current_lobby(db)
+    sheet_row_count = get_sheet_data_row_count_cached(sheet_tab) if sheet_tab else None
+    if sheet_row_count is not None:
+        total_registrations = max(total_registrations_db, sheet_row_count)
+    else:
+        total_registrations = total_registrations_db
 
     group_number = (total_registrations // group_size) + 1
     within_group_count = total_registrations % group_size
@@ -1167,6 +1179,8 @@ def calculate_registration_group_status(db: Session) -> dict:
     return {
         "group_size": group_size,
         "total_registrations": total_registrations,
+        "total_registrations_db": total_registrations_db,
+        "sheet_row_count": sheet_row_count,
         "group_number": group_number,
         "within_group_count": within_group_count,
         "remaining_in_group": remaining_in_group,
@@ -1180,8 +1194,9 @@ async def registration_group_status(db: Session = Depends(get_db)):
     """
     Public endpoint for the countdown.
 
-    Counts only the current admin registration lobby epoch. Admins can bump the epoch
-    to reset the countdown without waiting for `LOBBY_GROUP_SIZE` registrations.
+    Counts the current admin registration lobby epoch in the database. When Google Sheets
+    is enabled and a lobby tab name is set, also reads that tab's data row count and uses
+    max(DB, sheet) so manually added sheet rows reduce "spots left" like app registrations.
 
     Within an epoch, groups advance every `LOBBY_GROUP_SIZE` registrations.
     """

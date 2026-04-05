@@ -10,6 +10,7 @@ fallback when no explicit name is given.
 import os
 import logging
 import re
+import time
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -22,6 +23,8 @@ SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Entries")
 CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 MAX_ENTRIES_PER_SHEET = int(os.getenv("MAX_ENTRIES_PER_SHEET", "100"))
+SHEET_COUNT_CACHE_SECONDS = float(os.getenv("GOOGLE_SHEET_COUNT_CACHE_SECONDS", "30"))
+_sheet_row_count_cache: dict[str, tuple[int, float]] = {}
 
 
 def _parse_lobby_sheet_name(sheet_name: str) -> Optional[tuple[str, int]]:
@@ -169,36 +172,69 @@ try:
             logger.error(f"Error ensuring header row: {e}")
             return False
     
+    def _count_data_rows_from_values(rows: list) -> int:
+        """Count non-header data rows in A:I values (matches app + manual layout)."""
+        entry_count = 0
+        for row in rows:
+            if row and len(row) > 0:
+                has_data = any(cell.strip() if isinstance(cell, str) else cell for cell in row)
+                if has_data and len(row) > 0 and row[0] != "Time":
+                    entry_count += 1
+        return entry_count
+
     def count_entries_in_sheet(spreadsheet_id: str, sheet_name: str) -> int:
         """Count the number of data entries (excluding header) in a sheet"""
         service = get_sheets_service()
         if not service:
             return 0
-        
+
         try:
-            # Get all data from the sheet
             result = service.spreadsheets().values().get(
                 spreadsheetId=spreadsheet_id,
                 range=f"{sheet_name}!A:I"
             ).execute()
-            
             rows = result.get('values', [])
-            
-            # Count rows with actual data (excluding header)
-            entry_count = 0
-            for row in rows:
-                if row and len(row) > 0:
-                    # Check if row has any non-empty cells (skip header row)
-                    has_data = any(cell.strip() if isinstance(cell, str) else cell for cell in row)
-                    if has_data:
-                        # Check if it's not the header row (header has "Time" in first column)
-                        if len(row) > 0 and row[0] != "Time":
-                            entry_count += 1
-            
-            return entry_count
+            return _count_data_rows_from_values(rows)
         except Exception as e:
             logger.error(f"Error counting entries: {e}")
             return 0
+
+    def fetch_sheet_data_row_count(tab_name: str) -> Optional[int]:
+        """
+        Read current data row count for a tab. Returns None if Sheets is off, misconfigured,
+        or the API call fails (so callers can fall back to DB-only counts).
+        """
+        if not GOOGLE_SHEETS_ENABLED or not SPREADSHEET_ID or not tab_name:
+            return None
+        service = get_sheets_service()
+        if not service:
+            return None
+        try:
+            result = service.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{tab_name}!A:I"
+            ).execute()
+            rows = result.get("values", [])
+            return _count_data_rows_from_values(rows)
+        except HttpError as e:
+            logger.warning("Could not read sheet row count for tab %r: %s", tab_name, e)
+            return None
+        except Exception as e:
+            logger.warning("Could not read sheet row count for tab %r: %s", tab_name, e)
+            return None
+
+    def get_sheet_data_row_count_cached(tab_name: str) -> Optional[int]:
+        """Cached fetch of tab row count for public spot math (manual rows included)."""
+        if not tab_name:
+            return None
+        now = time.time()
+        hit = _sheet_row_count_cache.get(tab_name)
+        if hit is not None and (now - hit[1]) < SHEET_COUNT_CACHE_SECONDS:
+            return hit[0]
+        n = fetch_sheet_data_row_count(tab_name)
+        if n is not None:
+            _sheet_row_count_cache[tab_name] = (n, now)
+        return n
     
     def create_new_sheet(spreadsheet_id: str, base_sheet_name: str) -> Optional[str]:
         """Create a new sheet and return its name"""
@@ -626,4 +662,7 @@ except ImportError:
     
     def update_entry_in_sheets(payment_reference: str, updates: Dict, target_sheet: Optional[str] = None) -> bool:
         return False
+
+    def get_sheet_data_row_count_cached(tab_name: str) -> Optional[int]:
+        return None
 
