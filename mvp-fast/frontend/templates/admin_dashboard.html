@@ -164,7 +164,7 @@
 
                 <div class="admin-field">
                     <label class="admin-field-label">Lobby Cross-Check</label>
-                    <p class="admin-field-hint">Paste CODM IDs from the lobby, one per line</p>
+                    <p class="admin-field-hint">Paste In Game Names (IGNs) from the lobby, one per line</p>
                     <textarea id="lobby-ids-input" class="admin-input admin-textarea" rows="4" placeholder="Player1&#10;Player2&#10;Player3"></textarea>
                     <button type="button" class="admin-btn admin-btn-primary" onclick="lobbyCrossCheck()" style="margin-top: 12px;">Check Lobby</button>
                     <div id="lobby-check-result" class="admin-lobby-result" style="display: none;"></div>
@@ -206,7 +206,7 @@
                 <span>Entries</span>
                 <div class="admin-entries-toolbar">
                     <label class="admin-sr-only" for="entries-search-input">Search entries</label>
-                    <input type="search" id="entries-search-input" class="admin-input admin-entries-search" placeholder="Search ref, CODM, phone, email, bank…" autocomplete="off" spellcheck="false">
+                    <input type="search" id="entries-search-input" class="admin-input admin-entries-search" placeholder="Search ref, IGN, phone, email, bank…" autocomplete="off" spellcheck="false">
                     <span id="entries-filter-hint" class="admin-entries-count" aria-live="polite"></span>
                 </div>
             </div>
@@ -215,7 +215,7 @@
                     <thead>
                         <tr>
                             <th>Ref</th>
-                            <th>CODM ID</th>
+                            <th>IGN</th>
                             <th>Kills</th>
                             <th>Contact</th>
                             <th>Bank</th>

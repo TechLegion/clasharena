@@ -149,7 +149,7 @@ try:
             if not values or len(values) == 0:
                 headers = [
                     "Time",
-                    "Gamer ID Name",
+                    "In Game Name (IGN)",
                     "Number",
                     "Region",
                     "Bank Name",
@@ -434,6 +434,63 @@ try:
             logger.error("Error ensuring sheet tab '%s': %s", tab_name, e)
             return False
 
+    def rename_sheet_tab(spreadsheet_id: str, old_name: str, new_name: str) -> bool:
+        """Rename an existing Google Sheet tab from old_name to new_name."""
+        if not GOOGLE_SHEETS_ENABLED or not spreadsheet_id:
+            return False
+        if not old_name or not new_name or old_name.strip() == new_name.strip():
+            return False
+
+        service = get_sheets_service()
+        if not service:
+            return False
+
+        old_name = old_name.strip()
+        new_name = new_name.strip()
+
+        try:
+            spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            sheets = spreadsheet.get("sheets", [])
+
+            sheet_id = None
+            new_exists = False
+            for sheet in sheets:
+                title = sheet.get("properties", {}).get("title", "")
+                if title == old_name:
+                    sheet_id = sheet["properties"]["sheetId"]
+                if title == new_name:
+                    new_exists = True
+
+            if sheet_id is None:
+                logger.warning("Cannot rename: tab '%s' not found in spreadsheet", old_name)
+                return False
+
+            if new_exists:
+                logger.warning("Cannot rename: tab '%s' already exists in spreadsheet", new_name)
+                return False
+
+            request_body = {
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "title": new_name,
+                            },
+                            "fields": "title",
+                        }
+                    }
+                ]
+            }
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body=request_body
+            ).execute()
+            logger.info("Renamed sheet tab '%s' -> '%s'", old_name, new_name)
+            return True
+        except Exception as e:
+            logger.error("Error renaming sheet tab '%s' -> '%s': %s", old_name, new_name, e)
+            return False
+
     def save_entry_to_sheets(entry_data: Dict, target_sheet: Optional[str] = None) -> bool:
         """
         Save entry data to Google Sheets.
@@ -661,6 +718,9 @@ except ImportError:
         return False
     
     def update_entry_in_sheets(payment_reference: str, updates: Dict, target_sheet: Optional[str] = None) -> bool:
+        return False
+
+    def rename_sheet_tab(spreadsheet_id: str, old_name: str, new_name: str) -> bool:
         return False
 
     def get_sheet_data_row_count_cached(tab_name: str) -> Optional[int]:

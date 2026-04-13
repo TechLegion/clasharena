@@ -55,6 +55,7 @@
             <div class="entry-fee">
                 <p class="entry-fee-label">Entry fee</p>
                 <p class="entry-fee-amount"><span class="entry-fee-currency">₦</span>{{ entry_fee }}</p>
+                <p class="payment-warning">Please pay exactly ₦{{ entry_fee }}. No more, no less. Incorrect amounts may delay your registration.</p>
             </div>
 
             <p class="spots-left" id="group-countdown" aria-live="polite">
@@ -71,6 +72,10 @@
                         required 
                         class="email-input"
                     >
+                </div>
+                <div class="terms-agree">
+                    <input type="checkbox" id="termsCheckbox" required>
+                    <label for="termsCheckbox">I agree to the <a href="/terms" target="_blank">Terms &amp; Conditions</a></label>
                 </div>
                 <button type="submit" id="enterBtn" class="btn-primary">
                     <span>Enter Tournament</span>

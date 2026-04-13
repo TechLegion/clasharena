@@ -75,6 +75,13 @@ document.addEventListener('DOMContentLoaded', function() {
             errorMsg.style.display = 'block';
             return;
         }
+
+        var termsBox = document.getElementById('termsCheckbox');
+        if (termsBox && !termsBox.checked) {
+            errorMsg.textContent = 'You must agree to the Terms & Conditions before entering.';
+            errorMsg.style.display = 'block';
+            return;
+        }
         
         errorMsg.style.display = 'none';
         await initiatePayment(email);

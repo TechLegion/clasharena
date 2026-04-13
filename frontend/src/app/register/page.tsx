@@ -254,12 +254,8 @@ const RegisterPage = () => {
               />
               <label htmlFor="terms" className="ml-2 block text-sm text-gray-300">
                 I agree to the{' '}
-                <a href="#" className="text-orange-600 hover:text-orange-500">
-                  Terms of Service
-                </a>{' '}
-                and{' '}
-                <a href="#" className="text-orange-600 hover:text-orange-500">
-                  Privacy Policy
+                <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:text-orange-500">
+                  Terms &amp; Conditions
                 </a>
               </label>
             </div>

@@ -290,7 +290,7 @@ async function lobbyCrossCheck() {
     const resultDiv = document.getElementById('lobby-check-result');
     const ids = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
     if (ids.length === 0) {
-        resultDiv.innerHTML = '<span class="admin-msg-error">Enter at least one CODM ID</span>';
+        resultDiv.innerHTML = '<span class="admin-msg-error">Enter at least one In Game Name (IGN)</span>';
         resultDiv.style.display = 'block';
         return;
     }

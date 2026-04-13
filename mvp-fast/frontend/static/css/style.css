@@ -277,6 +277,21 @@ body {
     vertical-align: 0.25em;
 }
 
+.payment-warning {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-brand);
+    background: rgba(245, 173, 39, 0.1);
+    border: 1px solid rgba(245, 173, 39, 0.25);
+    border-radius: 8px;
+    padding: 10px 16px;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.5;
+}
+
 /* Spots left */
 .spots-left {
     margin: 16px auto 0;
@@ -328,6 +343,39 @@ body {
     border-color: var(--color-brand);
     box-shadow: 0 0 0 4px rgba(245, 173, 39, 0.1);
     background: rgba(31, 41, 55, 0.95);
+}
+
+/* Terms & Conditions checkbox */
+.terms-agree {
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 0.85rem;
+    color: var(--color-gray-400);
+}
+
+.terms-agree input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-brand);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.terms-agree label {
+    cursor: pointer;
+}
+
+.terms-agree a {
+    color: var(--color-brand);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.terms-agree a:hover {
+    text-decoration: underline;
 }
 
 /* Primary Button */

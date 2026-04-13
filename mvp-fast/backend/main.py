@@ -53,12 +53,16 @@ try:
         save_entry_to_sheets,
         update_entry_in_sheets,
         get_sheet_data_row_count_cached,
+        rename_sheet_tab,
+        SPREADSHEET_ID as SHEETS_SPREADSHEET_ID,
     )
 except ImportError:
     logger.warning("Google Sheets integration not available. Install google-api-python-client and google-auth to enable.")
     def save_entry_to_sheets(entry_data, target_sheet=None): return False
     def update_entry_in_sheets(payment_reference, updates, target_sheet=None): return False
     def get_sheet_data_row_count_cached(tab_name=None): return None
+    def rename_sheet_tab(spreadsheet_id, old_name, new_name): return False
+    SHEETS_SPREADSHEET_ID = ""
 
 # Import exchange rate module
 try:
@@ -478,7 +482,7 @@ class PaymentVerificationRequest(BaseModel):
 
 class PlayerIntakeRequest(BaseModel):
     payment_reference: str
-    codm_id: str = Field(..., min_length=1, description="Call of Duty Mobile ID")
+    codm_id: str = Field(..., min_length=1, description="In Game Name (IGN)")
     contact_phone: str = Field(..., min_length=1, description="Phone number")
     contact_email: EmailStr
     region: str = Field(..., min_length=1, description="Player region")
@@ -738,6 +742,11 @@ def check_registration_milestone(db: Session):
         return False
 
 # Routes
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page(request: Request):
+    """Terms & Conditions page"""
+    return templates.TemplateResponse("terms.html", {"request": request})
+
 @app.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request, db: Session = Depends(get_db)):
     """Landing page with entry button"""
@@ -1122,7 +1131,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             if normalize_codm_for_match(o.codm_id) == codm_key:
                 raise HTTPException(
                     status_code=409,
-                    detail="This CODM ID is already registered for the current lobby.",
+                    detail="This In Game Name (IGN) is already registered for the current lobby.",
                 )
             if (o.contact_email or "").strip().lower() == email_key:
                 raise HTTPException(
@@ -1197,7 +1206,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             "email",
             data.contact_email,
             "Welcome to ClashArena!",
-            f"Thank you for registering! Your CODM ID: {data.codm_id}. Match details will be sent soon.",
+            f"Thank you for registering! Your IGN: {data.codm_id}. Match details will be sent soon.",
             db
         )
         
@@ -1950,10 +1959,23 @@ async def set_registration_lobby_name_route(
     db: Session = Depends(get_db),
     admin: AdminUser = Depends(get_current_admin),
 ):
-    """Update the public display name for the current registration lobby (no cycle reset)."""
+    """Update the public display name for the current registration lobby (no cycle reset).
+    Also renames the corresponding Google Sheet tab if it exists."""
     try:
+        old_name = get_registration_lobby_name(db)
         set_registration_lobby_name(db, data.lobby_name, admin.id)
         name = get_registration_lobby_name(db)
+
+        if old_name and name and old_name != name and SHEETS_SPREADSHEET_ID:
+            try:
+                renamed = rename_sheet_tab(SHEETS_SPREADSHEET_ID, old_name, name)
+                if renamed:
+                    logger.info("Google Sheet tab renamed: '%s' -> '%s'", old_name, name)
+                else:
+                    logger.info("Google Sheet tab rename skipped (tab '%s' may not exist or '%s' already taken)", old_name, name)
+            except Exception as sheets_err:
+                logger.warning("Failed to rename Google Sheet tab: %s", sheets_err)
+
         return {"success": True, "message": "Lobby name updated", "registration_lobby_name": name}
     except Exception as e:
         logger.error(f"Error setting registration lobby name: {e}")
@@ -2045,7 +2067,7 @@ async def export_csv(db: Session = Depends(get_db), admin: AdminUser = Depends(g
         writer = csv.writer(output)
         writer.writerow([
             "Time",
-            "Gamer ID Name",
+            "In Game Name (IGN)",
             "Number",
             "Region",
             "Bank Name",
