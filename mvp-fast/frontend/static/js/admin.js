@@ -192,6 +192,75 @@ async function resetRegistrationLobby() {
     }
 }
 
+async function loadSheetTabs() {
+    const msg = document.getElementById('sheet-tabs-message');
+    const list = document.getElementById('sheet-tabs-list');
+    msg.innerHTML = '<span class="admin-msg-success">Loading...</span>';
+    list.innerHTML = '';
+    try {
+        const response = await fetch('/api/admin/sheet-tabs');
+        const data = await response.json();
+        if (!response.ok) {
+            msg.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || response.status) + '</span>';
+            return;
+        }
+        msg.innerHTML = '';
+        if (!data.tabs || data.tabs.length === 0) {
+            list.innerHTML = '<p style="color:var(--admin-text-muted);font-size:13px;">No tabs found (Google Sheets may not be configured).</p>';
+            return;
+        }
+        list.innerHTML = data.tabs.map((tab, i) => `
+            <div class="admin-field-row" style="margin-bottom:8px;" id="sheet-tab-row-${i}">
+                <input type="text" class="admin-input" id="sheet-tab-input-${i}" value="${tab.replace(/"/g, '&quot;')}" maxlength="200" autocomplete="off" style="max-width:320px;">
+                <button type="button" class="admin-btn admin-btn-primary" onclick="renameSheetTab(${i}, '${tab.replace(/'/g, "\\'")}')">Rename</button>
+                <span id="sheet-tab-msg-${i}" class="admin-msg" style="margin-left:8px;"></span>
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error(err);
+        msg.innerHTML = '<span class="admin-msg-error">Request failed</span>';
+    }
+}
+
+async function renameSheetTab(index, oldName) {
+    const input = document.getElementById(`sheet-tab-input-${index}`);
+    const msgEl = document.getElementById(`sheet-tab-msg-${index}`);
+    const newName = input ? input.value.trim() : '';
+    if (!newName) {
+        msgEl.innerHTML = '<span class="admin-msg-error">Name cannot be empty</span>';
+        return;
+    }
+    if (newName === oldName) {
+        msgEl.innerHTML = '<span class="admin-msg-error">No change</span>';
+        return;
+    }
+    msgEl.innerHTML = '<span class="admin-msg-success">Saving...</span>';
+    try {
+        const response = await fetch('/api/admin/rename-sheet-tab', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ old_name: oldName, new_name: newName }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            msgEl.innerHTML = '<span class="admin-msg-error">Failed: ' + (data.detail || response.status) + '</span>';
+            return;
+        }
+        if (data.success) {
+            msgEl.innerHTML = '<span class="admin-msg-success">✓ Renamed</span>';
+            // Update the stored old name so consecutive renames work
+            const btn = document.querySelector(`#sheet-tab-row-${index} button`);
+            if (btn) btn.setAttribute('onclick', `renameSheetTab(${index}, '${newName.replace(/'/g, "\\'")}')`);
+            setTimeout(() => { msgEl.innerHTML = ''; }, 3000);
+        } else {
+            msgEl.innerHTML = '<span class="admin-msg-error">Failed</span>';
+        }
+    } catch (err) {
+        console.error(err);
+        msgEl.innerHTML = '<span class="admin-msg-error">Request failed</span>';
+    }
+}
+
 async function updateCodLobbyLink() {
     const input = document.getElementById('cod-lobby-link-input');
     const messageDiv = document.getElementById('cod-lobby-message');

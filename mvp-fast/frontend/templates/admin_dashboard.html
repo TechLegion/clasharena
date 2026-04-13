@@ -163,6 +163,16 @@
                 <div class="admin-divider"></div>
 
                 <div class="admin-field">
+                    <label class="admin-field-label">Google Sheet Tabs</label>
+                    <p class="admin-field-hint">All tabs currently in your spreadsheet. Click a tab name to edit it and save to rename it in the sheet.</p>
+                    <button type="button" class="admin-btn admin-btn-secondary" onclick="loadSheetTabs()" style="margin-bottom: 12px;">Load tabs</button>
+                    <div id="sheet-tabs-message" class="admin-msg"></div>
+                    <div id="sheet-tabs-list"></div>
+                </div>
+
+                <div class="admin-divider"></div>
+
+                <div class="admin-field">
                     <label class="admin-field-label">Lobby Cross-Check</label>
                     <p class="admin-field-hint">Paste In Game Names (IGNs) from the lobby, one per line</p>
                     <textarea id="lobby-ids-input" class="admin-input admin-textarea" rows="4" placeholder="Player1&#10;Player2&#10;Player3"></textarea>

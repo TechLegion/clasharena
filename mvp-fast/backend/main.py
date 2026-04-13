@@ -54,6 +54,7 @@ try:
         update_entry_in_sheets,
         get_sheet_data_row_count_cached,
         rename_sheet_tab,
+        list_sheet_tabs,
         SPREADSHEET_ID as SHEETS_SPREADSHEET_ID,
     )
 except ImportError:
@@ -62,6 +63,7 @@ except ImportError:
     def update_entry_in_sheets(payment_reference, updates, target_sheet=None): return False
     def get_sheet_data_row_count_cached(tab_name=None): return None
     def rename_sheet_tab(spreadsheet_id, old_name, new_name): return False
+    def list_sheet_tabs(spreadsheet_id): return None
     SHEETS_SPREADSHEET_ID = ""
 
 # Import exchange rate module
@@ -1979,6 +1981,53 @@ async def set_registration_lobby_name_route(
         return {"success": True, "message": "Lobby name updated", "registration_lobby_name": name}
     except Exception as e:
         logger.error(f"Error setting registration lobby name: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/sheet-tabs")
+async def get_sheet_tabs(
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """List all tab names in the configured Google Spreadsheet (Admin only)."""
+    if not SHEETS_SPREADSHEET_ID:
+        return {"success": True, "tabs": [], "message": "Google Sheets not configured"}
+    tabs = list_sheet_tabs(SHEETS_SPREADSHEET_ID)
+    if tabs is None:
+        raise HTTPException(status_code=503, detail="Could not reach Google Sheets. Check credentials.")
+    return {"success": True, "tabs": tabs}
+
+
+class RenameSheetTabRequest(BaseModel):
+    old_name: str = Field(..., min_length=1, max_length=200, description="Current tab name")
+    new_name: str = Field(..., min_length=1, max_length=200, description="New tab name")
+
+
+@app.post("/api/admin/rename-sheet-tab")
+async def rename_sheet_tab_route(
+    data: RenameSheetTabRequest,
+    admin: AdminUser = Depends(get_current_admin),
+):
+    """Rename any Google Sheet tab by its current name (Admin only)."""
+    if not SHEETS_SPREADSHEET_ID:
+        raise HTTPException(status_code=400, detail="Google Sheets is not configured")
+    old = data.old_name.strip()
+    new = data.new_name.strip()
+    if old == new:
+        raise HTTPException(status_code=400, detail="Old and new names are the same")
+    try:
+        renamed = rename_sheet_tab(SHEETS_SPREADSHEET_ID, old, new)
+        if renamed:
+            logger.info("Admin renamed sheet tab '%s' -> '%s'", old, new)
+            return {"success": True, "message": f"Tab renamed: '{old}' → '{new}'"}
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Could not rename — tab '{old}' may not exist, or '{new}' already exists.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error renaming sheet tab: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

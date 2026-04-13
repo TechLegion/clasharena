@@ -434,6 +434,23 @@ try:
             logger.error("Error ensuring sheet tab '%s': %s", tab_name, e)
             return False
 
+    def list_sheet_tabs(spreadsheet_id: str) -> Optional[list]:
+        """Return a list of all tab (sheet) titles in the spreadsheet, or None on failure."""
+        if not GOOGLE_SHEETS_ENABLED or not spreadsheet_id:
+            return None
+        service = get_sheets_service()
+        if not service:
+            return None
+        try:
+            spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            return [
+                s.get("properties", {}).get("title", "")
+                for s in spreadsheet.get("sheets", [])
+            ]
+        except Exception as e:
+            logger.error("Error listing sheet tabs: %s", e)
+            return None
+
     def rename_sheet_tab(spreadsheet_id: str, old_name: str, new_name: str) -> bool:
         """Rename an existing Google Sheet tab from old_name to new_name."""
         if not GOOGLE_SHEETS_ENABLED or not spreadsheet_id:
@@ -719,6 +736,9 @@ except ImportError:
     
     def update_entry_in_sheets(payment_reference: str, updates: Dict, target_sheet: Optional[str] = None) -> bool:
         return False
+
+    def list_sheet_tabs(spreadsheet_id: str) -> Optional[list]:
+        return None
 
     def rename_sheet_tab(spreadsheet_id: str, old_name: str, new_name: str) -> bool:
         return False
