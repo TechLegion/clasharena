@@ -663,7 +663,8 @@ try:
                 if (search_codm_id and row[0] == search_codm_id) or (
                     search_phone and second == search_phone
                 ) or (search_email and second == search_email):
-                    row_index = idx + 1
+                    # idx is already the 1-based sheet row (enumerate(..., start=1)).
+                    row_index = idx
                     break
             
             if row_index is None:
