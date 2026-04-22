@@ -3,6 +3,9 @@
 .env.local
 .env.production
 
+# Local pytest SQLite (backend/tests)
+backend/tests/.mvp_test.db
+
 # Python
 __pycache__/
 *.py[cod]

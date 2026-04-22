@@ -61,7 +61,11 @@ try:
             connect_args=_connect_args
         )
     else:
-        _connect_args = {"connect_timeout": 10}
+        # sqlite3 does not accept connect_timeout (unlike libpq)
+        if DATABASE_URL and "sqlite" in DATABASE_URL:
+            _connect_args = {}
+        else:
+            _connect_args = {"connect_timeout": 10}
         engine = create_engine(
             DATABASE_URL,
             echo=False,
@@ -132,8 +136,43 @@ def get_db():
     if last_exc:
         raise last_exc
 
+def _transient_postgres_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        phrase in msg
+        for phrase in (
+            "starting up",
+            "server closed the connection",
+            "connection refused",
+            "could not connect",
+            "timeout expired",
+            "connection timed out",
+            "too many connections",
+            "the database system is not yet accepting",
+        )
+    )
+
+
 def init_db():
-    """Initialize database tables"""
+    """Initialize database tables. Retries on cold-start / proxy blips (common on Railway)."""
+    import time
+    from sqlalchemy.exc import OperationalError
     from database.models import Base
-    Base.metadata.create_all(bind=engine)
+
+    max_retries = 10 if IS_RAILWAY else 4
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            Base.metadata.create_all(bind=engine)
+            return
+        except OperationalError as exc:
+            last_exc = exc
+            if not _transient_postgres_error(exc) or attempt >= max_retries:
+                raise
+            delay = min(2 ** (attempt - 1), 16)
+            time.sleep(delay)
+
+    if last_exc:
+        raise last_exc
 

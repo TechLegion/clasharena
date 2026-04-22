@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, text
+from sqlalchemy import and_, text, func
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -16,6 +16,7 @@ import base64
 import secrets
 import json
 import time
+import unicodedata
 
 import sys
 from pathlib import Path
@@ -478,9 +479,103 @@ def _payment_epoch_for_duplicate_checks(entry: Entry) -> int:
     return 0
 
 
+def _normalize_registration_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optional[Entry]:
+    """
+    Return an entry the user should complete intake for.
+
+    Handles the common failure mode: Paystack charged successfully but the browser never reached
+    /intake/{ref}, so our row stayed payment_status='pending'. Without this, the same email starts
+    a brand-new checkout and can be charged twice.
+
+    Limitations (unchanged from gateway behaviour):
+    - Only helps when the user re-enters the *same* email on the home page; a different address is a
+      separate account row.
+    - At most the latest 12 *pending* rows are checked against the gateway; rare heavy abandoners
+      with more than that are not scanned (admin tools / support).
+    - No Paystack webhook here: if the user never returns and never retries with the same email,
+      the row is only updated when /intake/{ref} is opened or this recovery runs.
+    """
+    current_epoch = get_registration_lobby_epoch(db)
+
+    completed_open = (
+        db.query(Entry)
+        .filter(
+            func.lower(Entry.contact_email) == email_norm,
+            Entry.payment_status == "completed",
+            Entry.codm_id.is_(None),
+        )
+        .order_by(Entry.created_at.desc())
+        .first()
+    )
+    if completed_open:
+        # Legacy: payment went to "completed" before payment_completed_epoch existed.
+        if completed_open.payment_completed_epoch is None:
+            return completed_open
+        pending_ep = _payment_epoch_for_duplicate_checks(completed_open)
+        if current_epoch <= pending_ep:
+            return completed_open
+
+    pending_rows = (
+        db.query(Entry)
+        .filter(
+            func.lower(Entry.contact_email) == email_norm,
+            Entry.payment_status == "pending",
+            Entry.codm_id.is_(None),
+        )
+        .order_by(Entry.created_at.desc())
+        .limit(12)
+        .all()
+    )
+    for entry in pending_rows:
+        if PAYMENT_GATEWAY == "paystack":
+            verification = verify_paystack_payment(entry.payment_reference)
+        else:
+            verification = verify_flutterwave_payment(entry.payment_reference)
+        if not verification.get("verified"):
+            continue
+
+        mark_entry_payment_completed(entry, db)
+        payment = db.query(Payment).filter(Payment.reference == entry.payment_reference).first()
+        if payment:
+            payment.status = "success"
+            payment.gateway_response = verification.get("gateway_response", "")
+        db.commit()
+        db.refresh(entry)
+        pending_ep = _payment_epoch_for_duplicate_checks(entry)
+        if current_epoch <= pending_ep:
+            logger.info(
+                "Recovered gateway-paid entry for email=%s reference=%s (user missed intake redirect)",
+                email_norm,
+                entry.payment_reference,
+            )
+            return entry
+
+    return None
+
+
 # Pydantic Models
 class PaymentVerificationRequest(BaseModel):
     reference: str
+
+def _sanitize_user_text(v: str) -> str:
+    """Normalize unicode and strip invisible / odd space characters from user input."""
+    if not isinstance(v, str):
+        return v
+    v = unicodedata.normalize("NFC", v.strip())
+    out: list[str] = []
+    for ch in v:
+        if unicodedata.category(ch) == "Zs" and ch != " ":
+            out.append(" ")
+        elif ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\u2060"):
+            continue
+        else:
+            out.append(ch)
+    return "".join(out).strip()
+
 
 class PlayerIntakeRequest(BaseModel):
     payment_reference: str
@@ -491,7 +586,11 @@ class PlayerIntakeRequest(BaseModel):
     bank_name: str = Field(..., min_length=1, description="Bank name")
     account_number: str = Field(..., min_length=1, description="Account number")
     account_name: str = Field(..., min_length=1, description="Account holder name")
-    
+
+    @validator("codm_id", "region", "bank_name", "account_name", pre=True)
+    def clean_text_fields(cls, v):
+        return _sanitize_user_text(v) if isinstance(v, str) else v
+
     @validator('contact_phone', pre=True)
     def clean_phone(cls, v):
         """Clean phone number before validation"""
@@ -885,31 +984,21 @@ async def initiate_payment(
                 status_code=503, 
                 detail="Database connection error. Please try again in a moment."
             )
-        # Pending intake for this email: always finish that flow first
-        current_epoch = get_registration_lobby_epoch(db)
-        pending_intake = (
-            db.query(Entry)
-            .filter(
-                Entry.contact_email == email,
-                Entry.payment_status == "completed",
-                Entry.codm_id.is_(None),
-            )
-            .order_by(Entry.created_at.desc())
-            .first()
-        )
-        if pending_intake:
-            pending_ep = _payment_epoch_for_duplicate_checks(pending_intake)
-            if current_epoch <= pending_ep:
-                return {
-                    "success": True,
-                    "payment_completed": True,
-                    "message": "Payment already completed. Please complete your registration",
-                    "redirect_url": f"/intake/{pending_intake.payment_reference}",
-                }
-            # Paid before a prior lobby reset; new cycle — allow a fresh checkout
+        email_norm = _normalize_registration_email(email)
 
+        # Paid (or charged on gateway but DB still "pending") and intake not done — never start a second checkout.
+        resume_entry = recover_paid_intake_for_email(db, email_norm)
+        if resume_entry:
+            return {
+                "success": True,
+                "payment_completed": True,
+                "message": "Payment already completed. Continue your registration.",
+                "redirect_url": f"/intake/{resume_entry.payment_reference}",
+            }
+
+        current_epoch = get_registration_lobby_epoch(db)
         already_in_open_lobby = db.query(Entry).filter(
-            Entry.contact_email == email,
+            func.lower(Entry.contact_email) == email_norm,
             Entry.payment_status == "completed",
             Entry.codm_id.isnot(None),
             Entry.excluded == False,
@@ -934,7 +1023,7 @@ async def initiate_payment(
             payment_reference=payment_ref,
             payment_status="pending",
             entry_fee=entry_fee_ngn,
-            contact_email=email
+            contact_email=email_norm,
         )
         db.add(entry)
         db.commit()
@@ -956,7 +1045,7 @@ async def initiate_payment(
         if PAYMENT_GATEWAY == "paystack":
             if not PAYSTACK_SECRET_KEY:
                 raise HTTPException(status_code=500, detail="Paystack secret key not configured")
-            payment_result = initiate_paystack_payment(entry_fee_ngn, email, payment_ref)
+            payment_result = initiate_paystack_payment(entry_fee_ngn, email_norm, payment_ref)
             if payment_result.get("success"):
                 checkout_url = payment_result["authorization_url"]
             else:
@@ -964,7 +1053,7 @@ async def initiate_payment(
         else:  # flutterwave
             if not FLUTTERWAVE_SECRET_KEY:
                 raise HTTPException(status_code=500, detail="Flutterwave secret key not configured")
-            payment_result = initiate_flutterwave_payment(entry_fee_ngn, email, payment_ref)
+            payment_result = initiate_flutterwave_payment(entry_fee_ngn, email_norm, payment_ref)
             if payment_result.get("success"):
                 checkout_url = payment_result["link"]
             else:
