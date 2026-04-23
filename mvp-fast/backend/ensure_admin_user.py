@@ -2,7 +2,7 @@
 Idempotently ensure the MVP-Fast admin account exists.
 
 This targets the `/admin/login` dashboard which authenticates against
-`mvp-fast/database/models.py:AdminUser` (sha256 password_hash).
+`mvp-fast/database/models.py:AdminUser` (bcrypt `password_hash`).
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import sys
 import argparse
-import hashlib
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,11 +17,6 @@ from dotenv import load_dotenv
 _env = Path(__file__).resolve().parent.parent / ".env"
 if _env.exists():
     load_dotenv(_env)
-
-
-def hash_password(password: str) -> str:
-    """Must match `mvp-fast/backend/main.py` hashing scheme."""
-    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def main() -> int:
@@ -37,6 +31,7 @@ def main() -> int:
 
     from database.db import SessionLocal, init_db
     from database.models import AdminUser
+    from database.passwords import hash_password
 
     init_db()
     db = SessionLocal()

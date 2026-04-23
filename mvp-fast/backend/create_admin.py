@@ -11,11 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.db import SessionLocal, init_db
 from database.models import AdminUser
-import hashlib
-
-def hash_password(password: str) -> str:
-    """Simple password hashing"""
-    return hashlib.sha256(password.encode()).hexdigest()
+from database.passwords import hash_password
 
 def create_admin():
     """Create an admin user"""

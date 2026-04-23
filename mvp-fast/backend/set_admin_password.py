@@ -11,17 +11,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-
-
-def hash_password(password: str) -> str:
-    """Hash using the same scheme as `mvp-fast/backend/main.py`."""
-    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def main() -> int:
@@ -44,6 +38,7 @@ def main() -> int:
 
     from database.db import SessionLocal, init_db
     from database.models import AdminUser
+    from database.passwords import hash_password
 
     init_db()
 

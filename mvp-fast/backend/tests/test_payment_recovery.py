@@ -51,8 +51,9 @@ def test_normalize_registration_email() -> None:
     assert main._normalize_registration_email("") == ""
 
 
+@pytest.mark.asyncio
 @patch.object(main, "verify_paystack_payment", return_value={"verified": True, "gateway_response": "{}"})
-def test_recover_syncs_pending_to_completed_when_gateway_says_paid(_mock_verify: object) -> None:
+async def test_recover_syncs_pending_to_completed_when_gateway_says_paid(_mock_verify: object) -> None:
     _reset_schema()
     ref = f"CLASH_{uuid.uuid4().hex[:16].upper()}"
     eid = str(uuid.uuid4())
@@ -82,7 +83,7 @@ def test_recover_syncs_pending_to_completed_when_gateway_says_paid(_mock_verify:
 
     db2 = SessionLocal()
     try:
-        out = main.recover_paid_intake_for_email(db2, "player@example.com")
+        out = await main.recover_paid_intake_for_email(db2, "player@example.com")
         assert out is not None
         assert out.payment_reference == ref
         assert out.payment_status == "completed"
@@ -97,7 +98,8 @@ def test_recover_syncs_pending_to_completed_when_gateway_says_paid(_mock_verify:
         db3.close()
 
 
-def test_recover_returns_completed_intake_same_lobby_epoch() -> None:
+@pytest.mark.asyncio
+async def test_recover_returns_completed_intake_same_lobby_epoch() -> None:
     _reset_schema()
     ref = f"CLASH_{uuid.uuid4().hex[:16].upper()}"
     eid = str(uuid.uuid4())
@@ -118,7 +120,7 @@ def test_recover_returns_completed_intake_same_lobby_epoch() -> None:
 
     db2 = SessionLocal()
     try:
-        out = main.recover_paid_intake_for_email(db2, "donepay@example.com")
+        out = await main.recover_paid_intake_for_email(db2, "donepay@example.com")
         assert out is not None
         assert out.payment_reference == ref
     finally:

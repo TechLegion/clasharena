@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, text, func
+from sqlalchemy import and_, or_, text, func
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -17,6 +17,8 @@ import secrets
 import json
 import time
 import unicodedata
+import asyncio
+import functools
 
 import sys
 from pathlib import Path
@@ -37,6 +39,7 @@ if str(root_dir) not in sys.path:
 try:
     from database.db import get_db, init_db
     from database.models import Entry, Payment, Payout, AdminUser, Notification, AppSettings, RegistrationMilestone
+    from database.passwords import hash_password, verify_password, is_legacy_sha256_hash
 except ImportError as e:
     print(f"Error importing database modules: {e}")
     print(f"Python path: {sys.path}")
@@ -241,9 +244,10 @@ else:
 
 # Configuration
 # Payment Gateway - using same Paystack keys as main app
-PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "sk_live_2ab66b1fe6bf3073420cf0d8513cd965de1dd021")
-PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "pk_live_bcace690c5b14739346161a501307ad4f9688e30")
-FLUTTERWAVE_SECRET_KEY = os.getenv("FLUTTERWAVE_SECRET_KEY", "")
+# Never default to real keys in source — set PAYSTACK_* in environment or .env only.
+PAYSTACK_SECRET_KEY = (os.getenv("PAYSTACK_SECRET_KEY") or "").strip()
+PAYSTACK_PUBLIC_KEY = (os.getenv("PAYSTACK_PUBLIC_KEY") or "").strip()
+FLUTTERWAVE_SECRET_KEY = (os.getenv("FLUTTERWAVE_SECRET_KEY") or "").strip()
 PAYMENT_GATEWAY = os.getenv("PAYMENT_GATEWAY", "paystack")  # paystack or flutterwave
 ENTRY_FEE_USD = float(os.getenv("ENTRY_FEE_USD", "1.0"))  # $1 USD entry fee
 WHATSAPP_GROUP_LINK = os.getenv("WHATSAPP_GROUP_LINK", "https://chat.whatsapp.com/your-group-link")
@@ -483,7 +487,7 @@ def _normalize_registration_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optional[Entry]:
+async def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optional[Entry]:
     """
     Return an entry the user should complete intake for.
 
@@ -512,9 +516,9 @@ def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optional[Entr
         .first()
     )
     if completed_open:
-        # Legacy: payment went to "completed" before payment_completed_epoch existed.
-        if completed_open.payment_completed_epoch is None:
-            return completed_open
+        # Only resume intake if this incomplete payment still belongs to the *current* registration
+        # lobby epoch (or legacy epoch 0). If admin opened a new lobby, current_epoch rises and
+        # we must not send users to old intake — they need a new checkout for the new cycle.
         pending_ep = _payment_epoch_for_duplicate_checks(completed_open)
         if current_epoch <= pending_ep:
             return completed_open
@@ -532,9 +536,13 @@ def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optional[Entr
     )
     for entry in pending_rows:
         if PAYMENT_GATEWAY == "paystack":
-            verification = verify_paystack_payment(entry.payment_reference)
+            verification = await asyncio.to_thread(
+                verify_paystack_payment, entry.payment_reference
+            )
         else:
-            verification = verify_flutterwave_payment(entry.payment_reference)
+            verification = await asyncio.to_thread(
+                verify_flutterwave_payment, entry.payment_reference
+            )
         if not verification.get("verified"):
             continue
 
@@ -616,14 +624,7 @@ class MarkWinnerRequest(BaseModel):
 class TriggerPayoutRequest(BaseModel):
     entry_id: str
 
-# Helper Functions
-def hash_password(password: str) -> str:
-    """Simple password hashing (use bcrypt in production)"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def verify_password(password: str, password_hash: str) -> bool:
-    return hash_password(password) == password_hash
-
+# Helper Functions (admin passwords: see database.passwords)
 def verify_paystack_payment(reference: str) -> dict:
     """Verify payment with Paystack"""
     import requests
@@ -700,7 +701,7 @@ def verify_flutterwave_payment(reference: str) -> dict:
         return {"verified": False, "error": str(e)}
 
 def send_notification(entry_id: str, notification_type: str, recipient: str, subject: str, message: str, db: Session):
-    """Create notification record"""
+    """Persist a notification row for audit/future use. No email/SMS push is sent yet (see deployment)."""
     notification = Notification(
         entry_id=entry_id,
         notification_type=notification_type,
@@ -711,8 +712,11 @@ def send_notification(entry_id: str, notification_type: str, recipient: str, sub
     )
     db.add(notification)
     db.commit()
-    # TODO: Integrate with actual email/WhatsApp/SMS services
-    logger.info(f"Notification created: {notification_type} to {recipient}")
+    logger.info(
+        "Notification logged only (not delivered externally): %s to %s",
+        notification_type,
+        recipient,
+    )
 
 def get_whatsapp_link(db: Session) -> str:
     """Get WhatsApp group link from database or environment"""
@@ -987,7 +991,7 @@ async def initiate_payment(
         email_norm = _normalize_registration_email(email)
 
         # Paid (or charged on gateway but DB still "pending") and intake not done — never start a second checkout.
-        resume_entry = recover_paid_intake_for_email(db, email_norm)
+        resume_entry = await recover_paid_intake_for_email(db, email_norm)
         if resume_entry:
             return {
                 "success": True,
@@ -1045,7 +1049,9 @@ async def initiate_payment(
         if PAYMENT_GATEWAY == "paystack":
             if not PAYSTACK_SECRET_KEY:
                 raise HTTPException(status_code=500, detail="Paystack secret key not configured")
-            payment_result = initiate_paystack_payment(entry_fee_ngn, email_norm, payment_ref)
+            payment_result = await asyncio.to_thread(
+                initiate_paystack_payment, entry_fee_ngn, email_norm, payment_ref
+            )
             if payment_result.get("success"):
                 checkout_url = payment_result["authorization_url"]
             else:
@@ -1053,7 +1059,9 @@ async def initiate_payment(
         else:  # flutterwave
             if not FLUTTERWAVE_SECRET_KEY:
                 raise HTTPException(status_code=500, detail="Flutterwave secret key not configured")
-            payment_result = initiate_flutterwave_payment(entry_fee_ngn, email_norm, payment_ref)
+            payment_result = await asyncio.to_thread(
+                initiate_flutterwave_payment, entry_fee_ngn, email_norm, payment_ref
+            )
             if payment_result.get("success"):
                 checkout_url = payment_result["link"]
             else:
@@ -1111,9 +1119,9 @@ async def intake_page(
         # Verify payment
         logger.info(f"Verifying payment for reference: {payment_reference}")
         if PAYMENT_GATEWAY == "paystack":
-            verification = verify_paystack_payment(payment_reference)
+            verification = await asyncio.to_thread(verify_paystack_payment, payment_reference)
         else:
-            verification = verify_flutterwave_payment(payment_reference)
+            verification = await asyncio.to_thread(verify_flutterwave_payment, payment_reference)
         
         logger.info(f"Verification result: {verification}")
         
@@ -1179,9 +1187,9 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
         if entry.payment_status != "completed":
             logger.info(f"Re-verifying payment for reference: {data.payment_reference}")
             if PAYMENT_GATEWAY == "paystack":
-                verification = verify_paystack_payment(data.payment_reference)
+                verification = await asyncio.to_thread(verify_paystack_payment, data.payment_reference)
             else:
-                verification = verify_flutterwave_payment(data.payment_reference)
+                verification = await asyncio.to_thread(verify_flutterwave_payment, data.payment_reference)
             
             if verification.get("verified"):
                 mark_entry_payment_completed(entry, db)
@@ -1210,30 +1218,43 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
         phone_key = normalize_phone_digits(phone_cleaned)
         email_key = (data.contact_email or "").strip().lower()
 
-        # Same email/phone/CODM once per registration lobby epoch (not per 100-slot batch).
-        peers = db.query(Entry).filter(
-            Entry.payment_status == "completed",
-            Entry.codm_id.isnot(None),
-            Entry.excluded == False,
-            Entry.lobby_epoch == current_epoch,
-            Entry.id != entry.id,
-        ).all()
-        for o in peers:
-            if normalize_codm_for_match(o.codm_id) == codm_key:
+        # Same email/phone/CODM once per registration lobby epoch — filter in DB, not a Python loop.
+        phone_digits_sql = func.regexp_replace(Entry.contact_phone, "[^0-9]", "", "g")
+        peer_conditions = [func.lower(Entry.contact_email) == email_key, func.lower(func.trim(Entry.codm_id)) == codm_key]
+        if phone_key:
+            peer_conditions.append(phone_digits_sql == phone_key)
+        conflict = (
+            db.query(Entry)
+            .filter(
+                Entry.payment_status == "completed",
+                Entry.codm_id.isnot(None),
+                Entry.excluded == False,
+                Entry.lobby_epoch == current_epoch,
+                Entry.id != entry.id,
+                or_(*peer_conditions),
+            )
+            .first()
+        )
+        if conflict:
+            if normalize_codm_for_match(conflict.codm_id) == codm_key:
                 raise HTTPException(
                     status_code=409,
                     detail="This In Game Name (IGN) is already registered for the current lobby.",
                 )
-            if (o.contact_email or "").strip().lower() == email_key:
+            if (conflict.contact_email or "").strip().lower() == email_key:
                 raise HTTPException(
                     status_code=409,
                     detail="This email is already registered for the current lobby.",
                 )
-            if phone_key and normalize_phone_digits(o.contact_phone) == phone_key:
+            if phone_key and normalize_phone_digits(conflict.contact_phone) == phone_key:
                 raise HTTPException(
                     status_code=409,
                     detail="This phone number is already registered for the current lobby.",
                 )
+            raise HTTPException(
+                status_code=409,
+                detail="This registration conflicts with an existing player in the current lobby.",
+            )
 
         # Update entry with player details (use cleaned values)
         entry.codm_id = data.codm_id
@@ -1277,7 +1298,9 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             
             sheets_tab = get_sheets_tab_for_current_lobby(db)
             logger.info(f"Attempting to save entry to Google Sheets (tab={sheets_tab}): {entry.payment_reference}")
-            result = save_entry_to_sheets(entry_data, target_sheet=sheets_tab)
+            result = await asyncio.to_thread(
+                functools.partial(save_entry_to_sheets, entry_data, target_sheet=sheets_tab)
+            )
             if result:
                 logger.info(f"Successfully saved entry to Google Sheets: {entry.payment_reference}")
             else:
@@ -1297,7 +1320,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             "email",
             data.contact_email,
             "Welcome to ClashArena!",
-            f"Thank you for registering! Your IGN: {data.codm_id}. Match details will be sent soon.",
+            f"Thank you for registering! Your IGN: {data.codm_id}. Use the WhatsApp group for match updates (no automated email is sent from this app yet).",
             db
         )
         
@@ -1441,6 +1464,11 @@ async def admin_login(request: Request, username: str = Form(...), password: str
                 "request": request,
                 "error": "Account is disabled"
             }, status_code=403)
+        
+        if is_legacy_sha256_hash(admin.password_hash):
+            admin.password_hash = hash_password(password)
+            db.commit()
+            db.refresh(admin)
         
         issued_at = int(time.time())
         session_token = _make_admin_session_token(admin.id, issued_at)
@@ -1594,8 +1622,14 @@ async def trigger_payout(data: TriggerPayoutRequest, db: Session = Depends(get_d
     entry.payout_status = "processing"
     db.commit()
     
-    # TODO: Integrate with actual payout gateway
-    # For now, mark as completed after processing
+    # No bank/API transfer is performed here. Status is set to completed for the MVP
+    # so the admin UI matches manual payouts. Replace with a real transfer + webhook
+    # before treating DB rows as proof of money movement.
+    logger.warning(
+        "Payout %s: marked completed without an external bank/API transfer. "
+        "Reconcile with real bank records.",
+        payout.id,
+    )
     payout.status = "completed"
     entry.payout_status = "completed"
     db.commit()
@@ -1741,7 +1775,7 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
                     db.refresh(entry)  # Refresh to get updated data
                     logger.info(f"Payment status updated to completed for reference: {reference}")
                     
-                    # Update Google Sheets
+                    # Update Google Sheets (blocking HTTP — run off event loop)
                     try:
                         updates = {"payment_status": "completed"}
                         if entry.codm_id:
@@ -1750,7 +1784,15 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
                             updates["contact_phone"] = entry.contact_phone
                         elif entry.contact_email:
                             updates["contact_email"] = entry.contact_email
-                        update_entry_in_sheets(reference, updates, target_sheet=get_sheets_tab_for_current_lobby(db))
+                        sheets_tab = get_sheets_tab_for_current_lobby(db)
+                        await asyncio.to_thread(
+                            functools.partial(
+                                update_entry_in_sheets,
+                                reference,
+                                updates,
+                                target_sheet=sheets_tab,
+                            )
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to update Google Sheets: {e}")
                 else:
@@ -2154,7 +2196,7 @@ async def update_kill_count(
         entry.kill_count = data.kill_count
         db.commit()
         db.refresh(entry)
-        # Sync to Google Sheets
+        # Sync to Google Sheets (blocking API — off event loop)
         try:
             per_kill_value = get_per_kill_value_usd(db)
             dollar_rate = get_live_dollar_rate()
@@ -2162,12 +2204,20 @@ async def update_kill_count(
             payout_ngn = kc * per_kill_value * dollar_rate
             entry_fee = float(entry.entry_fee) if entry.entry_fee else 0
             payout_str = f"₦{payout_ngn:,.2f}" if kc else f"₦{entry_fee:,.2f}"
-            update_entry_in_sheets(entry.payment_reference, {
-                "codm_id": entry.codm_id,
-                "contact_phone": entry.contact_phone or "",
-                "kill": data.kill_count,
-                "payout": payout_str,
-            }, target_sheet=get_sheets_tab_for_current_lobby(db))
+            sheets_tab = get_sheets_tab_for_current_lobby(db)
+            await asyncio.to_thread(
+                functools.partial(
+                    update_entry_in_sheets,
+                    entry.payment_reference,
+                    {
+                        "codm_id": entry.codm_id,
+                        "contact_phone": entry.contact_phone or "",
+                        "kill": data.kill_count,
+                        "payout": payout_str,
+                    },
+                    target_sheet=sheets_tab,
+                )
+            )
         except Exception as e:
             logger.warning(f"Failed to sync kill count to Google Sheets: {e}")
         return {"success": True, "message": "Kill count updated", "entry_id": entry.id, "kill_count": data.kill_count}
@@ -2289,11 +2339,19 @@ async def bulk_payout(db: Session = Depends(get_db), admin: AdminUser = Depends(
                 db.commit()
                 processed += 1
                 try:
-                    update_entry_in_sheets(entry.payment_reference, {
-                        "codm_id": entry.codm_id,
-                        "contact_phone": entry.contact_phone or "",
-                        "payment_status": "completed",
-                    }, target_sheet=get_sheets_tab_for_current_lobby(db))
+                    sheets_tab = get_sheets_tab_for_current_lobby(db)
+                    await asyncio.to_thread(
+                        functools.partial(
+                            update_entry_in_sheets,
+                            entry.payment_reference,
+                            {
+                                "codm_id": entry.codm_id,
+                                "contact_phone": entry.contact_phone or "",
+                                "payment_status": "completed",
+                            },
+                            target_sheet=sheets_tab,
+                        )
+                    )
                 except Exception:
                     pass
             except Exception as e:
@@ -2481,22 +2539,25 @@ async def deactivate_admin_user(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/admin/admin-users")
-async def get_admin_users(db: Session = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
+async def get_admin_users(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
     """Get list of all admin users"""
     try:
-        admins = db.query(AdminUser).order_by(AdminUser.created_at.desc()).all()
+        all_admins = db.query(AdminUser).order_by(AdminUser.created_at.desc()).all()
         
         return {
             "success": True,
             "admins": [
                 {
-                    "id": admin.id,
-                    "username": admin.username,
-                    "email": admin.email,
-                    "is_active": admin.is_active,
-                    "created_at": admin.created_at.isoformat() if admin.created_at else None
+                    "id": row.id,
+                    "username": row.username,
+                    "email": row.email,
+                    "is_active": row.is_active,
+                    "created_at": row.created_at.isoformat() if row.created_at else None
                 }
-                for admin in admins
+                for row in all_admins
             ]
         }
     except Exception as e:
