@@ -130,35 +130,57 @@ try:
                 return None
         return _sheets_service
     
+    _CANONICAL_HEADERS = [
+        "Time",
+        "In Game Name (IGN)",
+        "Number",
+        "Email",
+        "Region",
+        "Bank Name",
+        "Bank Account Number",
+        "Kill",
+        "Payout",
+        "Paid",
+    ]
+
+    def _legacy_sheet_needs_email_column(first_row: list) -> bool:
+        """
+        True if row 1 is our historic layout: Time in A, no Email in D yet.
+        Inserts column D so existing Region→Paid shift right (same as manual insert).
+        """
+        if not first_row:
+            return False
+        if str(first_row[0]).strip() != "Time":
+            return False
+        if len(first_row) >= 4 and str(first_row[3]).strip() == "Email":
+            return False
+        if len(first_row) == 9 and not any(
+            str(c).strip() == "Email" for c in first_row
+        ):
+            return True
+        if len(first_row) >= 4 and str(first_row[3]).strip() == "Region":
+            return True
+        return False
+
     def ensure_header_row(spreadsheet_id: str, sheet_name: str):
-        """Ensure header row exists in the sheet"""
+        """
+        Ensure row 1 has the canonical headers. For an existing sheet that still uses
+        the 9-column layout, insert column D (Email) once so all rows stay aligned.
+        """
         service = get_sheets_service()
         if not service:
             return False
         
         try:
-            # Get the current values
             result = service.spreadsheets().values().get(
                 spreadsheetId=spreadsheet_id,
                 range=f"{sheet_name}!A1:Z1"
             ).execute()
             
             values = result.get('values', [])
-            
-            # If no header row exists, create it
-            if not values or len(values) == 0:
-                headers = [
-                    "Time",
-                    "In Game Name (IGN)",
-                    "Number",
-                    "Region",
-                    "Bank Name",
-                    "Bank Account Number",
-                    "Kill",
-                    "Payout",
-                    "Paid",
-                ]
-                
+            headers = _CANONICAL_HEADERS
+
+            if not values or len(values) == 0 or not values[0]:
                 service.spreadsheets().values().update(
                     spreadsheetId=spreadsheet_id,
                     range=f"{sheet_name}!A1",
@@ -166,14 +188,61 @@ try:
                     body={'values': [headers]}
                 ).execute()
                 logger.info("Header row created in Google Sheet")
-            
+                return True
+
+            first = values[0]
+            if _legacy_sheet_needs_email_column(first):
+                spreadsheet = service.spreadsheets().get(
+                    spreadsheetId=spreadsheet_id
+                ).execute()
+                sheet_id = None
+                for sheet in spreadsheet.get("sheets", []):
+                    props = sheet.get("properties", {})
+                    if (props.get("title") or "") == sheet_name:
+                        sheet_id = props.get("sheetId")
+                        break
+                if sheet_id is None:
+                    logger.warning(
+                        "Tab %r not found; cannot insert Email column", sheet_name
+                    )
+                    return False
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id,
+                    body={
+                        "requests": [
+                            {
+                                "insertDimension": {
+                                    "range": {
+                                        "sheetId": sheet_id,
+                                        "dimension": "COLUMNS",
+                                        "startIndex": 3,
+                                        "endIndex": 4,
+                                    },
+                                    "inheritFromBefore": False,
+                                }
+                            }
+                        ]
+                    },
+                ).execute()
+                logger.info(
+                    "Inserted column D (Email) in tab %r; existing columns shifted right",
+                    sheet_name,
+                )
+                service.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"{sheet_name}!A1",
+                    valueInputOption="RAW",
+                    body={"values": [headers]},
+                ).execute()
+                logger.info("Header row updated with Email in tab %r", sheet_name)
+
             return True
         except HttpError as e:
             logger.error(f"Error ensuring header row: {e}")
             return False
     
     def _count_data_rows_from_values(rows: list) -> int:
-        """Count non-header data rows in A:I values (matches app + manual layout)."""
+        """Count non-header data rows in A:J values (matches app + manual layout)."""
         entry_count = 0
         for row in rows:
             if row and len(row) > 0:
@@ -191,7 +260,7 @@ try:
         try:
             result = service.spreadsheets().values().get(
                 spreadsheetId=spreadsheet_id,
-                range=f"{sheet_name}!A:I"
+                range=f"{sheet_name}!A:J"
             ).execute()
             rows = result.get('values', [])
             return _count_data_rows_from_values(rows)
@@ -212,7 +281,7 @@ try:
         try:
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{tab_name}!A:I"
+                range=f"{tab_name}!A:J"
             ).execute()
             rows = result.get("values", [])
             return _count_data_rows_from_values(rows)
@@ -545,7 +614,7 @@ try:
             # Ensure header row exists
             ensure_header_row(SPREADSHEET_ID, current_sheet)
             
-            # Client sheet layout: Time, Gamer ID Name, Number, Region, Bank Name,
+            # Client sheet layout: Time, Gamer ID Name, Number, Email, Region, Bank Name,
             # Bank Account Number, Kill, Payout, Paid
             entry_time = datetime.now().strftime("%I:%M %p")
             entry_fee_ngn = float(entry_data.get("entry_fee", 0) or 0)
@@ -561,6 +630,7 @@ try:
                 entry_time,
                 entry_data.get("codm_id", ""),
                 entry_data.get("contact_phone", ""),
+                entry_data.get("contact_email", "") or "",
                 entry_data.get("region", ""),
                 entry_data.get("bank_name", ""),
                 entry_data.get("account_number", ""),
@@ -573,7 +643,7 @@ try:
             # Get all data in the sheet to find the true last row
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{current_sheet}!A:I"
+                range=f"{current_sheet}!A:J"
             ).execute()
             
             existing_rows = result.get('values', [])
@@ -637,10 +707,10 @@ try:
             else:
                 current_sheet = get_active_sheet_name()
             
-            # Match row by Gamer ID (B) or Number (C — phone; legacy sheets may have email in C)
+            # Match row by Gamer ID (B), phone (C), or email (D)
             result = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{current_sheet}!B:C",
+                range=f"{current_sheet}!B:D",
             ).execute()
             
             values = result.get('values', [])
@@ -650,19 +720,21 @@ try:
             search_phone = updates.get("contact_phone", "")
             search_email = updates.get("contact_email", "")
             
+            # Drop identity fields used for row matching from writes; allow contact_email so D can be backfilled/updated
             search_updates = {
                 k: v
                 for k, v in updates.items()
-                if k not in ["codm_id", "contact_phone", "contact_email"]
+                if k not in ["codm_id", "contact_phone"]
             }
             
             for idx, row in enumerate(values, start=1):
                 if not row:
                     continue
-                second = row[1] if len(row) > 1 else ""
+                col_c = row[1] if len(row) > 1 else ""
+                col_d = row[2] if len(row) > 2 else ""
                 if (search_codm_id and row[0] == search_codm_id) or (
-                    search_phone and second == search_phone
-                ) or (search_email and second == search_email):
+                    search_phone and col_c == search_phone
+                ) or (search_email and col_d == search_email):
                     # idx is already the 1-based sheet row (enumerate(..., start=1)).
                     row_index = idx
                     break
@@ -674,17 +746,18 @@ try:
             # Use search_updates instead of updates for the actual update
             updates = search_updates
             
-            # A=Time, B=Gamer ID Name, C=Number, D=Region, E=Bank Name, F=Bank Account,
-            # G=Kill, H=Payout, I=Paid
+            # A=Time, B=Gamer ID Name, C=Number, D=Email, E=Region, F=Bank Name, G=Bank Account,
+            # H=Kill, I=Payout, J=Paid
             column_map = {
                 "codm_id": "B",
                 "contact_phone": "C",
-                "region": "D",
-                "bank_name": "E",
-                "account_number": "F",
-                "kill": "G",
-                "payout": "H",
-                "payment_status": "I",
+                "contact_email": "D",
+                "region": "E",
+                "bank_name": "F",
+                "account_number": "G",
+                "kill": "H",
+                "payout": "I",
+                "payment_status": "J",
             }
             
             update_requests = []
