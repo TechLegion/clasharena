@@ -1404,11 +1404,31 @@ async def admin_login_page(request: Request, error: Optional[str] = Query(None))
     """Admin login page"""
     return templates.TemplateResponse("admin_login.html", {"request": request, "error": error})
 
+def _find_admin_by_login_identifier(db: Session, username_or_email: str) -> Optional[AdminUser]:
+    """Match admin by username, or by email (case-insensitive) if the field looks like an email."""
+    raw = (username_or_email or "").strip()
+    if not raw:
+        return None
+    admin = db.query(AdminUser).filter(AdminUser.username == raw).first()
+    if admin:
+        return admin
+    if "@" in raw:
+        return (
+            db.query(AdminUser)
+            .filter(
+                AdminUser.email.isnot(None),
+                func.lower(AdminUser.email) == raw.lower(),
+            )
+            .first()
+        )
+    return None
+
+
 @app.post("/admin/login")
 async def admin_login(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     """Admin login"""
     try:
-        admin = db.query(AdminUser).filter(AdminUser.username == username).first()
+        admin = _find_admin_by_login_identifier(db, username)
         if not admin or not verify_password(password, admin.password_hash):
             # Return login page with error message
             return templates.TemplateResponse("admin_login.html", {

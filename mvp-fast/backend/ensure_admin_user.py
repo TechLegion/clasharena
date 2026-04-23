@@ -11,6 +11,13 @@ import os
 import sys
 import argparse
 import hashlib
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_env = Path(__file__).resolve().parent.parent / ".env"
+if _env.exists():
+    load_dotenv(_env)
 
 
 def hash_password(password: str) -> str:
