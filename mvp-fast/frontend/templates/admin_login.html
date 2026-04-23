@@ -17,8 +17,8 @@
         {% endif %}
         <form method="POST" action="/admin/login">
             <div class="admin-field">
-                <label class="admin-field-label" for="username">Username</label>
-                <input type="text" id="username" name="username" class="admin-input" required autofocus>
+                <label class="admin-field-label" for="username">Username or email</label>
+                <input type="text" id="username" name="username" class="admin-input" required autofocus autocomplete="username">
             </div>
             <div class="admin-field">
                 <label class="admin-field-label" for="password">Password</label>
