@@ -35,6 +35,8 @@ class Entry(Base):
     lobby_epoch = Column(Integer, nullable=False, default=0, index=True)
     # Registration lobby epoch when payment completed (intake may finish later). Used to release stale pending intakes after admin opens a new lobby.
     payment_completed_epoch = Column(Integer, nullable=True, index=True)
+    # Epoch when this checkout was started (set in initiate_payment). Used when marking success so a paid row always reflects the lobby the user paid for, not a later "new lobby" epoch.
+    checkout_lobby_epoch = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

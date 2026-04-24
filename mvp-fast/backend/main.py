@@ -183,8 +183,9 @@ try:
                     "WHERE payment_status = 'completed' AND payment_completed_epoch IS NULL"
                 )
             )
+            conn.execute(text("ALTER TABLE entries ADD COLUMN IF NOT EXISTS checkout_lobby_epoch INTEGER"))
             conn.commit()
-        logger.info("Database migrations applied (kill_count, excluded, lobby_group, lobby_epoch, payment_completed_epoch)")
+        logger.info("Database migrations applied (kill_count, excluded, lobby_group, lobby_epoch, payment_completed_epoch, checkout_lobby_epoch)")
     except Exception as mig_e:
         if "already exists" in str(mig_e).lower():
             pass  # Columns exist, skip
@@ -471,9 +472,14 @@ def get_sheets_tab_for_current_lobby(db: Session) -> Optional[str]:
 
 
 def mark_entry_payment_completed(entry: Entry, db: Session) -> None:
-    """Record payment success and the registration lobby epoch at that moment (for stale-pending handling)."""
+    """Record payment success; stamp the lobby epoch for *this* checkout (not the epoch at mark time, which can be wrong after a new lobby)."""
     entry.payment_status = "completed"
-    entry.payment_completed_epoch = get_registration_lobby_epoch(db)
+    if entry.checkout_lobby_epoch is not None:
+        entry.payment_completed_epoch = int(entry.checkout_lobby_epoch)
+    else:
+        # Legacy rows created before checkout_lobby_epoch: unknown cycle — treat as 0 so
+        # recover_paid_intake_for_email can still resume when the lobby is still epoch 0.
+        entry.payment_completed_epoch = 0
 
 
 def _payment_epoch_for_duplicate_checks(entry: Entry) -> int:
@@ -1022,12 +1028,14 @@ async def initiate_payment(
         # Generate unique payment reference
         payment_ref = f"CLASH_{secrets.token_hex(8).upper()}"
         
-        # Create entry record
+        # Create entry record (fix checkout to current registration cycle so a later "new lobby" does not
+        # re-stamp the wrong payment_completed_epoch when Paystack is verified)
         entry = Entry(
             payment_reference=payment_ref,
             payment_status="pending",
             entry_fee=entry_fee_ngn,
             contact_email=email_norm,
+            checkout_lobby_epoch=current_epoch,
         )
         db.add(entry)
         db.commit()
