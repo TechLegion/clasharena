@@ -181,3 +181,47 @@ async def test_recover_does_not_resume_stale_checkout_after_new_lobby(_mock_veri
         assert out is None
     finally:
         db2.close()
+
+
+@pytest.mark.asyncio
+async def test_recover_does_not_resume_stale_completed_intake() -> None:
+    """Open intake (completed, no CODM) from an old cycle must not resume when the lobby was bumped."""
+    _reset_schema()
+    dbx = SessionLocal()
+    try:
+        dbx.add(
+            AppSettings(
+                id=str(uuid.uuid4()),
+                key=main.REGISTRATION_LOBBY_EPOCH_KEY,
+                value="1",
+                description="test",
+            )
+        )
+        dbx.commit()
+    finally:
+        dbx.close()
+
+    ref = f"CLASH_{uuid.uuid4().hex[:16].upper()}"
+    eid = str(uuid.uuid4())
+    db = SessionLocal()
+    try:
+        db.add(
+            Entry(
+                id=eid,
+                payment_reference=ref,
+                payment_status="completed",
+                contact_email="oldcycle@example.com",
+                entry_fee=Decimal("100.00"),
+                payment_completed_epoch=0,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    db2 = SessionLocal()
+    try:
+        out = await main.recover_paid_intake_for_email(db2, "oldcycle@example.com")
+        assert out is None
+    finally:
+        db2.close()

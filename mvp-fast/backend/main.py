@@ -483,7 +483,10 @@ def mark_entry_payment_completed(entry: Entry, db: Session) -> None:
 
 
 def _payment_epoch_for_duplicate_checks(entry: Entry) -> int:
-    """Epoch to use when comparing pending rows to current lobby (coalesce for legacy rows)."""
+    """Registration cycle this payment was started for. Prefer checkout_lobby_epoch (set at /api/initiate-payment);
+    it matches the user intent even if payment_completed_epoch was ever out of sync."""
+    if entry.checkout_lobby_epoch is not None:
+        return int(entry.checkout_lobby_epoch)
     if entry.payment_completed_epoch is not None:
         return int(entry.payment_completed_epoch)
     return 0
@@ -522,12 +525,19 @@ async def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optiona
         .first()
     )
     if completed_open:
-        # Only resume intake if this incomplete payment still belongs to the *current* registration
-        # lobby epoch (or legacy epoch 0). If admin opened a new lobby, current_epoch rises and
-        # we must not send users to old intake — they need a new checkout for the new cycle.
-        pending_ep = _payment_epoch_for_duplicate_checks(completed_open)
-        if current_epoch <= pending_ep:
+        # Resume only if this payment is for the *same* registration cycle as the server (not <=).
+        # Using <= was wrong: e.g. current=0 and payment_epoch=1 made 0<=1 true and skipped re-pay;
+        # after a new lobby we need *equality* with the bumped registration_lobby_epoch.
+        entry_epoch = _payment_epoch_for_duplicate_checks(completed_open)
+        if entry_epoch == current_epoch:
             return completed_open
+        logger.info(
+            "Skip resume intake: email=%s ref=%s entry_epoch=%s current_registration_epoch=%s",
+            email_norm,
+            completed_open.payment_reference,
+            entry_epoch,
+            current_epoch,
+        )
 
     pending_rows = (
         db.query(Entry)
@@ -559,14 +569,21 @@ async def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optiona
             payment.gateway_response = verification.get("gateway_response", "")
         db.commit()
         db.refresh(entry)
-        pending_ep = _payment_epoch_for_duplicate_checks(entry)
-        if current_epoch <= pending_ep:
+        entry_epoch = _payment_epoch_for_duplicate_checks(entry)
+        if entry_epoch == current_epoch:
             logger.info(
                 "Recovered gateway-paid entry for email=%s reference=%s (user missed intake redirect)",
                 email_norm,
                 entry.payment_reference,
             )
             return entry
+        logger.info(
+            "Recovered payment not for current cycle: email=%s ref=%s entry_epoch=%s current=%s (no intake redirect)",
+            email_norm,
+            entry.payment_reference,
+            entry_epoch,
+            current_epoch,
+        )
 
     return None
 
@@ -1157,6 +1174,21 @@ async def intake_page(
     # Check if already submitted (double check after refresh)
     if entry.codm_id:
         return RedirectResponse(url=f"/thank-you/{payment_reference}", status_code=302)
+
+    if entry.payment_status == "completed" and not entry.codm_id:
+        _ce = get_registration_lobby_epoch(db)
+        if _payment_epoch_for_duplicate_checks(entry) != _ce:
+            return HTMLResponse(
+                status_code=200,
+                content=(
+                    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                    "<title>Current lobby has changed</title><meta name='viewport' content='width=device-width,initial-scale=1'/></head>"
+                    "<body style='font-family:system-ui,Segoe UI,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;line-height:1.5'>"
+                    "<h1>Current lobby has changed</h1>"
+                    "<p>This payment was for a <strong>previous</strong> registration cycle. To join the current lobby, go back to the home page, enter the same email, and complete payment for <strong>this</strong> cycle.</p>"
+                    "<p><a href='/'>Back to home</a></p></body></html>"
+                ),
+            )
     
     # Payment verified, show intake form
     try:
@@ -1214,6 +1246,12 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             raise HTTPException(status_code=400, detail="Intake already submitted")
 
         current_epoch = get_registration_lobby_epoch(db)
+        if _payment_epoch_for_duplicate_checks(entry) != current_epoch:
+            raise HTTPException(
+                status_code=409,
+                detail="This payment is for a previous registration lobby. Please return to the home page, enter your email, and pay the entry fee for the current lobby.",
+            )
+
         total_before = db.query(Entry).filter(
             Entry.payment_status == "completed",
             Entry.codm_id.isnot(None),
