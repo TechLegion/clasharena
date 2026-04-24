@@ -9,6 +9,7 @@ cmds = [
 
 [start]
 # Use 1 worker for Railway (NullPool = fresh conn/request; 1 worker minimizes connection load)
-# Ensure the admin account exists before starting the web server (idempotent).
-cmd = "cd backend && source /opt/venv/bin/activate && python ensure_admin_user.py && gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT --timeout 120"
+# Bootstrap admin in the background: must NOT block gunicorn — if the DB is slow, misconfigured, or
+# ensure fails (e.g. unique constraint), the web process still must bind to $PORT for healthchecks.
+cmd = "cd backend && source /opt/venv/bin/activate && (python ensure_admin_user.py || echo \"ensure_admin_user.py failed (see logs), starting server anyway\") && gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT --timeout 120"
 

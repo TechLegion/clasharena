@@ -4,7 +4,8 @@ builder = "nixpacks"
 
 [deploy]
 # startCommand removed - let nixpacks.toml handle the start process
-healthcheckPath = "/"
+# Liveness: no DB dependency; avoids slow/failed get_db on cold start while / still uses the DB
+healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10

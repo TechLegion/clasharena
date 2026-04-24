@@ -3,6 +3,10 @@ Idempotently ensure the MVP-Fast admin account exists.
 
 This targets the `/admin/login` dashboard which authenticates against
 `mvp-fast/database/models.py:AdminUser` (bcrypt `password_hash`).
+
+Exit code is always 0 on completion so a deploy start command
+(`ensure_admin_user && gunicorn`) never blocks the web server if the DB
+is unavailable or a row already exists in an unexpected shape.
 """
 
 from __future__ import annotations
@@ -33,49 +37,50 @@ def main() -> int:
     from database.models import AdminUser
     from database.passwords import hash_password
 
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        print(
+            f"ensure_admin_user: init_db failed (web server will still try to start): {e}",
+            file=sys.stderr,
+        )
+        return 0
+
     db = SessionLocal()
     try:
         new_hash = hash_password(args.password)
 
         existing_by_email = db.query(AdminUser).filter(AdminUser.email == args.email).first()
-        existing_by_username = db.query(AdminUser).filter(AdminUser.username == args.username).first()
+        existing_by_username = (
+            db.query(AdminUser).filter(AdminUser.username == args.username).first()
+        )
 
-        updated = False
-
-        # Ensure the username we want exists with the right password.
         if existing_by_username:
-            existing_by_username.password_hash = new_hash
-            existing_by_username.is_active = True
-            if not existing_by_username.email:
-                existing_by_username.email = args.email
-            updated = True
-            target_user = existing_by_username
+            u = existing_by_username
+            u.password_hash = new_hash
+            u.is_active = True
+            if not u.email:
+                u.email = args.email
+            db.commit()
+            target_user = u
+        elif existing_by_email:
+            # Do not create a second row: email is unique; sync password for that account.
+            u = existing_by_email
+            u.password_hash = new_hash
+            u.is_active = True
+            db.commit()
+            target_user = u
         else:
-            # If email exists under a different username, we can't change username/email safely
-            # due to unique constraints; instead create the requested username record.
-            target_user = AdminUser(
+            u = AdminUser(
                 username=args.username,
                 email=args.email,
                 password_hash=new_hash,
                 is_active=True,
             )
-            db.add(target_user)
+            db.add(u)
             db.commit()
-            db.refresh(target_user)
-            updated = True
-
-        # If email existed as a separate row, align its password too (optional but harmless).
-        if existing_by_email and existing_by_email.id != target_user.id:
-            existing_by_email.password_hash = new_hash
-            existing_by_email.is_active = True
-            updated = True
-
-        if updated and not existing_by_username:
-            # Already committed in creation path.
-            pass
-        elif updated:
-            db.commit()
+            db.refresh(u)
+            target_user = u
 
         print(
             "Admin ensure result:"
@@ -85,13 +90,18 @@ def main() -> int:
         )
         return 0
     except Exception as e:
-        print(f"Failed to ensure admin user: {e}")
-        db.rollback()
-        return 2
+        print(
+            f"Failed to ensure admin user (not blocking server start): {e}",
+            file=sys.stderr,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0
     finally:
         db.close()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
