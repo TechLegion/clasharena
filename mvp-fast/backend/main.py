@@ -476,6 +476,14 @@ def mark_entry_payment_completed(entry: Entry, db: Session) -> None:
     entry.payment_status = "completed"
     if entry.checkout_lobby_epoch is not None:
         entry.payment_completed_epoch = int(entry.checkout_lobby_epoch)
+        g = get_registration_lobby_epoch(db)
+        if int(entry.checkout_lobby_epoch) > g:
+            logger.warning(
+                "mark_entry_payment_completed: checkout_lobby_epoch %s is above global %s for ref=%s; intake/resume is blocked by _is_entry_for_current_registration_cycle until data is fixed.",
+                entry.checkout_lobby_epoch,
+                g,
+                entry.payment_reference,
+            )
     else:
         # Legacy rows created before checkout_lobby_epoch: unknown cycle — treat as 0 so
         # recover_paid_intake_for_email can still resume when the lobby is still epoch 0.
@@ -490,6 +498,48 @@ def _payment_epoch_for_duplicate_checks(entry: Entry) -> int:
     if entry.payment_completed_epoch is not None:
         return int(entry.payment_completed_epoch)
     return 0
+
+
+def _is_entry_for_current_registration_cycle(entry: Entry, current_epoch: int) -> bool:
+    """
+    True only when the entry’s paid-for cycle matches `registration_lobby_epoch` (same-cycle intake / resume).
+
+    If the row’s effective epoch is *above* the global counter (inconsistent: rolled-back global, bad import,
+    old bugs), that must *never* be treated as "current" — we log and return False. Normal writes set
+    checkout_lobby_epoch to the global at initiate time, so "ahead" is rare; we still block it in code.
+    """
+    ee = _payment_epoch_for_duplicate_checks(entry)
+    if ee > current_epoch:
+        logger.warning(
+            "Registration epoch for entry ref=%s is %s, above global %s; will not treat as current cycle (fix data or global).",
+            entry.payment_reference,
+            ee,
+            current_epoch,
+        )
+        return False
+    return ee == current_epoch
+
+
+def _count_incomplete_entries_in_prior_cycles(db: Session, current_epoch: int) -> int:
+    """
+    Rows with no CODM yet whose paid-for registration cycle is *strictly before* the current
+    `registration_lobby_epoch`. After a lobby reset bumps the global epoch, all of them are treated
+    the same: recovery will not send them to /intake; they need a new checkout. Same rule for
+    every email/entry; there is no per-user “stuck in the last lobby” state beyond these integers.
+    """
+    effective_epoch = func.coalesce(Entry.checkout_lobby_epoch, Entry.payment_completed_epoch, 0)
+    return (
+        db.query(Entry)
+        .filter(
+            Entry.codm_id.is_(None),
+            or_(
+                Entry.payment_status == "pending",
+                Entry.payment_status == "completed",
+            ),
+            effective_epoch < current_epoch,
+        )
+        .count()
+    )
 
 
 def _normalize_registration_email(email: str) -> str:
@@ -525,19 +575,19 @@ async def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optiona
         .first()
     )
     if completed_open:
-        # Resume only if this payment is for the *same* registration cycle as the server (not <=).
-        # Using <= was wrong: e.g. current=0 and payment_epoch=1 made 0<=1 true and skipped re-pay;
-        # after a new lobby we need *equality* with the bumped registration_lobby_epoch.
+        # Resume only if this payment is for the *same* registration cycle (see _is_entry_for_current_registration_cycle;
+        # never resume when the row is "ahead" of the global counter).
         entry_epoch = _payment_epoch_for_duplicate_checks(completed_open)
-        if entry_epoch == current_epoch:
+        if _is_entry_for_current_registration_cycle(completed_open, current_epoch):
             return completed_open
-        logger.info(
-            "Skip resume intake: email=%s ref=%s entry_epoch=%s current_registration_epoch=%s",
-            email_norm,
-            completed_open.payment_reference,
-            entry_epoch,
-            current_epoch,
-        )
+        if entry_epoch < current_epoch:
+            logger.info(
+                "Skip resume intake: email=%s ref=%s entry_epoch=%s current_registration_epoch=%s",
+                email_norm,
+                completed_open.payment_reference,
+                entry_epoch,
+                current_epoch,
+            )
 
     pending_rows = (
         db.query(Entry)
@@ -570,20 +620,21 @@ async def recover_paid_intake_for_email(db: Session, email_norm: str) -> Optiona
         db.commit()
         db.refresh(entry)
         entry_epoch = _payment_epoch_for_duplicate_checks(entry)
-        if entry_epoch == current_epoch:
+        if _is_entry_for_current_registration_cycle(entry, current_epoch):
             logger.info(
                 "Recovered gateway-paid entry for email=%s reference=%s (user missed intake redirect)",
                 email_norm,
                 entry.payment_reference,
             )
             return entry
-        logger.info(
-            "Recovered payment not for current cycle: email=%s ref=%s entry_epoch=%s current=%s (no intake redirect)",
-            email_norm,
-            entry.payment_reference,
-            entry_epoch,
-            current_epoch,
-        )
+        if entry_epoch < current_epoch:
+            logger.info(
+                "Recovered payment not for current cycle: email=%s ref=%s entry_epoch=%s current=%s (no intake redirect)",
+                email_norm,
+                entry.payment_reference,
+                entry_epoch,
+                current_epoch,
+            )
 
     return None
 
@@ -1177,7 +1228,7 @@ async def intake_page(
 
     if entry.payment_status == "completed" and not entry.codm_id:
         _ce = get_registration_lobby_epoch(db)
-        if _payment_epoch_for_duplicate_checks(entry) != _ce:
+        if not _is_entry_for_current_registration_cycle(entry, _ce):
             return HTMLResponse(
                 status_code=200,
                 content=(
@@ -1246,7 +1297,7 @@ async def submit_intake(data: PlayerIntakeRequest, db: Session = Depends(get_db)
             raise HTTPException(status_code=400, detail="Intake already submitted")
 
         current_epoch = get_registration_lobby_epoch(db)
-        if _payment_epoch_for_duplicate_checks(entry) != current_epoch:
+        if not _is_entry_for_current_registration_cycle(entry, current_epoch):
             raise HTTPException(
                 status_code=409,
                 detail="This payment is for a previous registration lobby. Please return to the home page, enter your email, and pay the entry fee for the current lobby.",
@@ -2129,8 +2180,9 @@ async def reset_registration_lobby(
     data: ResetRegistrationLobbyRequest = Body(default_factory=ResetRegistrationLobbyRequest),
 ):
     """
-    Open a new registration lobby cycle: public countdown and per-lobby duplicate rules
-    apply only to entries recorded from now on (same email/CODM/phone can register again).
+    Open a new registration lobby cycle: increments `registration_lobby_epoch` for the whole app.
+    Every player is then judged against the same new number: resume /intake only if an open entry’s
+    paid-for cycle equals this epoch; all older open payments are a clean break (new checkout).
     """
     try:
         new_epoch = bump_registration_lobby_epoch(db, admin.id)
@@ -2138,6 +2190,12 @@ async def reset_registration_lobby(
         display_name = raw if raw else f"Lobby {new_epoch}"
         set_registration_lobby_name(db, display_name, admin.id)
         cycle = calculate_registration_group_status(db)
+        stale_incomplete = _count_incomplete_entries_in_prior_cycles(db, new_epoch)
+        logger.info(
+            "New registration cycle %s: %s incomplete entry/entries from prior cycles (no intake resume; new pay).",
+            new_epoch,
+            stale_incomplete,
+        )
         return {
             "success": True,
             "message": "New registration lobby cycle started.",
@@ -2146,6 +2204,7 @@ async def reset_registration_lobby(
             "current_cycle_registrations": cycle["total_registrations"],
             "current_cycle_group_number": cycle["group_number"],
             "current_cycle_remaining_in_group": cycle["remaining_in_group"],
+            "incomplete_entries_prior_cycles": stale_incomplete,
         }
     except Exception as e:
         logger.error(f"Error resetting registration lobby: {e}")

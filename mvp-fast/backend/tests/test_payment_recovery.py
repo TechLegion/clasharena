@@ -225,3 +225,18 @@ async def test_recover_does_not_resume_stale_completed_intake() -> None:
         assert out is None
     finally:
         db2.close()
+
+
+def test_is_entry_for_current_registration_cycle_rejects_ahead_of_global() -> None:
+    """Row effective epoch > global must never count as the current cycle (bad data / rolled-back global)."""
+    e = Entry(
+        id=str(__import__("uuid").uuid4()),
+        payment_reference="T",
+        payment_status="completed",
+        contact_email="a@a.com",
+        entry_fee=Decimal("100.00"),
+        payment_completed_epoch=5,
+    )
+    assert main._is_entry_for_current_registration_cycle(e, 4) is False
+    assert main._is_entry_for_current_registration_cycle(e, 5) is True
+    assert main._is_entry_for_current_registration_cycle(e, 6) is False
