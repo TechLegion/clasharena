@@ -639,37 +639,14 @@ try:
                 paid_status,
             ]
             
-            # Find the last row with data to append right after it
-            # Get all data in the sheet to find the true last row
-            result = service.spreadsheets().values().get(
+            # Use API append so concurrent registrations never compute the same "next row"
+            # and overwrite each other.
+            service.spreadsheets().values().append(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{current_sheet}!A:J"
-            ).execute()
-            
-            existing_rows = result.get('values', [])
-            
-            # Find the last row that has any data by checking from the end
-            last_row_with_data = 0
-            for i in range(len(existing_rows) - 1, -1, -1):
-                row_data = existing_rows[i]
-                # Check if row has any non-empty cells
-                if row_data and any(cell.strip() if isinstance(cell, str) else cell for cell in row_data):
-                    last_row_with_data = i + 1  # +1 because sheets are 1-indexed
-                    break
-            
-            # If no data found, start at row 1 (or row 2 if you want to preserve header)
-            if last_row_with_data == 0:
-                last_row_with_data = 1
-            
-            # Insert at the next row after last data
-            next_row = last_row_with_data + 1
-            
-            # Append row to sheet at specific position (right after last data row)
-            service.spreadsheets().values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{current_sheet}!A{next_row}",
-                valueInputOption='RAW',
-                body={'values': [row]}
+                range=f"{current_sheet}!A:J",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row]},
             ).execute()
             
             logger.info(f"Entry saved to Google Sheets ({current_sheet}): {entry_data.get('payment_reference')}")
