@@ -1,8 +1,8 @@
-# 🎮 ClashArena - Gaming Platform
+#  ClashArena - Gaming Platform
 
 A modern gaming platform for competitive mobile gaming with real money tournaments and matches.
 
-## 🌟 Features
+##  Features
 
 ### Core Gaming Features
 - **Real Money Matches**: Head-to-head battles with cash prizes
@@ -21,7 +21,7 @@ A modern gaming platform for competitive mobile gaming with real money tournamen
 - **Flutterwave**: For cost-effective bulk payments
 - **Hybrid System**: 50% cost savings on bulk operations
 
-## 🚀 Tech Stack
+##  Tech Stack
 
 ### Frontend
 - **Next.js 14** with TypeScript
@@ -112,7 +112,7 @@ cp .env.example .env
 3. **Database**: Use Railway PostgreSQL or Neon
 4. **Domain**: Configure custom domain
 
-## 📱 Usage
+##  Usage
 
 ### For Players
 1. **Sign Up** with email/phone
@@ -136,19 +136,14 @@ cp .env.example .env
 - **HTTPS Enforcement**
 - **Secure Payment Processing**
 
-## 📊 Cost Optimization
+##  Cost Optimization
 
 ### Payment Fees Comparison
 - **Paystack Only**: ₦50 per bulk transfer
 - **Hybrid System**: ₦25 per bulk transfer
 - **Savings**: 50% reduction in fees
 
-### Infrastructure Costs
-- **Development**: $50-100/month
-- **Production**: $200-500/month
-- **Scaling**: $500-2000/month
-
-## 🤝 Contributing
+##  Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -156,17 +151,17 @@ cp .env.example .env
 4. Push to the branch
 5. Create a Pull Request
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License.
 
-## 🆘 Support
+##  Support
 
 For support and questions:
 - **Email**: techlegion01@gmail.com
 - **GitHub Issues**: [Create an issue](https://github.com/TechLegion/clasharena/issues)
 
-## 🎯 Roadmap
+##  Roadmap
 
 ### Phase 1 (Current)
 - ✅ User authentication and wallet
@@ -181,11 +176,11 @@ For support and questions:
 - 🔄 Referral system
 
 ### Phase 3 (Future)
-- 📊 Machine learning matchmaking
+-  Machine learning matchmaking
 - 🌍 International expansion
 - 🎮 More game integrations
-- 💰 Cryptocurrency support
+-  Cryptocurrency support
 
 ---
 
-**Built with ❤️ by TechLegion**
+**Built by TechLegion**
